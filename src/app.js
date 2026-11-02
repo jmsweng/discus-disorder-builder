@@ -37,6 +37,7 @@ function commit({ render = true, preview = true } = {}) {
   save();
   try { validation = DB.validate(S); } catch (e) { validation = { errs: [e.message], warns: [] }; }
   renderStatus();
+  const pi = $("#pinfo"); if (pi) pi.textContent = planeInfo();
   if (render) renderSection();
   if (preview) schedulePreview();
   markDiffuseStale();
@@ -524,8 +525,11 @@ const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
   "pv-n": "Size of each random preview crystal (cells per axis, at most the supercell).",
   "pv-d": "Number of independent random crystals averaged; more crystals, less speckle.",
+  "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
+  "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
 };
+["u", "v", "origin"].forEach(k => [1, 2].forEach(i => { TIPS_ID[`pv-${k}-${i}`] = TIPS_ID[`pv-${k}-0`]; }));
 function applyTips(root) {
   $$("[data-b]", root).forEach(el => {
     const hit = TIPS_B.find(([re]) => re.test(el.dataset.b));
@@ -613,8 +617,8 @@ const ACT = {
   "cells": el => { cellsShown = +el.dataset.v; drawCrystal(); $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown))); },
   "color": el => { colorMode = el.dataset.v; drawCrystal(); $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode))); },
   "diffuse": () => (diffuseRunning ? cancelDiffuse() : runDiffuse()),
-  "plane": el => { const v = el.dataset.v; const P = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] }[v];
-    S.calc.preview.u = P[0]; S.calc.preview.v = P[1]; save(); renderBenchControls(); markDiffuseStale(); },
+  "plane": el => { const v = el.dataset.v; const P = PLANES[v];
+    S.calc.preview.u = P[0].slice(); S.calc.preview.v = P[1].slice(); S.calc.preview.origin = [0, 0, 0]; save(); renderBenchControls(); markDiffuseStale(); },
 };
 function download(name, text, type) {
   try {
@@ -635,7 +639,13 @@ function toast(m) { let el = $("#toast"); el.textContent = m; el.hidden = false;
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "file-in") { importFile(el.files[0]); el.value = ""; return; }
-  if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); markDiffuseStale(); return; }
+  if (/^pv-(u|v|origin)-\d$/.test(el.id)) {
+    const [, k, i] = /^pv-(u|v|origin)-(\d)$/.exec(el.id); const x = +el.value;
+    S.calc.preview[k][+i] = isFinite(x) ? x : 0;
+    if (S.calc.preview.u.every(q => q === 0) || S.calc.preview.v.every(q => q === 0)) toast("u and v must not be zero vectors");
+    save(); renderBenchControls(); markDiffuseStale(); return;
+  }
+  if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); renderBenchControls(); markDiffuseStale(); return; }
   const path = el.dataset.b; if (!path) return;
   let v = el.value;
   const t = el.dataset.t;
@@ -731,13 +741,37 @@ function drawCrystal() {
 // diffuse
 let diffuseJob = 0;
 function markDiffuseStale() { const s = $("#dstate"); if (s && !s.dataset.running) s.textContent = "Model changed: compute again to update."; }
+const PLANES = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
 function renderBenchControls() {
   const pv = S.calc.preview;
-  const key = JSON.stringify([pv.u, pv.v]);
-  const names = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
-  $("#planes").innerHTML = Object.entries(names).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${JSON.stringify(v) === key}">${k === "hhl" ? "hhl" : k}</button>`).join("");
+  if (!pv.origin) pv.origin = [0, 0, 0];
+  const key = JSON.stringify([pv.u.map(Number), pv.v.map(Number)]), atOrigin = pv.origin.every(x => +x === 0);
+  $("#planes").innerHTML = Object.entries(PLANES).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${atOrigin && JSON.stringify(v) === key}">${k}</button>`).join("");
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
+  ["u", "v", "origin"].forEach(k => [0, 1, 2].forEach(i => { $(`#pv-${k}-${i}`).value = pv[k][i]; }));
+  $("#pinfo").textContent = planeInfo();
   applyTips($("#planes"));
+}
+// how the preview plane relates to the DISCUS grid of the Calculations step, and whether it is commensurate
+function planeInfo() {
+  const pv = S.calc.preview, u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
+  const n = previewN(), notes = [];
+  const isInt = x => Math.abs(x - Math.round(x)) < 1e-9;
+  if (![...u, ...v].every(isInt)) notes.push("u or v is not a whole-number vector, so the points are not commensurate with the crystal: expect ripples.");
+  if (!o.every((x, k) => isInt(x * n[k]))) notes.push(`The offset is not a multiple of 1/${n.join(", 1/")} (the preview crystal), so it falls between allowed points: expect ripples.`);
+  const unit = w => { const nz = w.map((x, k) => [x, k]).filter(([x]) => x !== 0); return nz.length === 1 && nz[0][0] === 1 ? nz[0][1] : -1; };
+  const i = unit(u), j = unit(v), f = S.calc.fourier;
+  if (i < 0 || j < 0 || i === j) notes.push("Oblique plane: it is not one slice of the DISCUS 3D grid; compare it by eye.");
+  else {
+    const k = 3 - i - j, hkl = "hkl";
+    if (o[i] || o[j]) notes.push("An offset within the plane only shifts the window; the DISCUS slices are centred on 0.");
+    const step = +f.steps[k], idx = o[k] / step, half = Math.round(+f.hmax[k] / step);
+    if (!f.enabled) notes.push(`Same cut as the ${hkl[k]} = ${fmt(o[k], 4)} slice of a 3D grid (3D diffuse is switched off).`);
+    else if (!isInt(idx)) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is not on the DISCUS grid (step ${fmt(step, 4)} along ${hkl[k]}).`);
+    else if (Math.abs(idx) > half) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is outside the DISCUS grid (±${fmt(+f.hmax[k], 3)}).`);
+    else notes.push(`Same cut as the DISCUS slice ${hkl[k]} = ${fmt(o[k], 4)}: index ${Math.round(idx) + half} along array axis ${k} of diffuse.npz.`);
+  }
+  return notes.join(" ");
 }
 let diffuseRunning = null;
 function setDiffuseButton(running) {
@@ -762,7 +796,7 @@ function runDiffuse() {
   const t0 = performance.now();
   const start = () => {
     real = DB.realize(S, { n: previewN(), seed: (+S.seed || 1) + 7919 * previewSeed + 104729 * d, maxSweeps: 60 });
-    plane = DB.diffusePlaneRows(real, { u: pv.u, v: pv.v, range: +pv.range || 4 });
+    plane = DB.diffusePlaneRows(real, { u: pv.u, v: pv.v, origin: pv.origin, range: +pv.range || 4 });
     if (!sum) { P = plane.P; sum = new Float64Array(P * P); }
     natoms = real.atoms.length; a = 0;
   };
@@ -797,8 +831,9 @@ function drawHeat(img, P, t) {
     id.data[o] = c[0]; id.data[o + 1] = c[1]; id.data[o + 2] = c[2]; id.data[o + 3] = 255;
   }
   g.putImageData(id, 0, 0);
-  const pv = S.calc.preview, lab = v => `[${v.join(" ")}]`;
-  $("#daxes").innerHTML = `<span>${fmt(t[0], 2)}</span><span>→ ${lab(pv.u)} (r.l.u.) · ↑ ${lab(pv.v)}</span><span>${fmt(t[t.length - 1], 2)}</span>`;
+  const pv = S.calc.preview, lab = v => `[${v.map(x => fmt(+x, 3)).join(" ")}]`;
+  const off = (pv.origin || [0, 0, 0]).some(x => +x) ? ` · offset ${lab(pv.origin)}` : "";
+  $("#daxes").innerHTML = `<span>${fmt(t[0], 2)}</span><span>→ ${lab(pv.u)} · ↑ ${lab(pv.v)}${off}</span><span>${fmt(t[t.length - 1], 2)}</span>`;
 }
 
 // ------------------------------------------------------------------------------------------ boot

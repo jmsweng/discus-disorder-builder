@@ -593,6 +593,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     import matplotlib.pyplot as plt
     plane = plane or cfg.get("calc", {}).get("preview", {"u": [1, 0, 0], "v": [0, 1, 0], "range": 6})
     u, v, R = np.array(plane["u"], float), np.array(plane["v"], float), float(plane["range"])
+    o = np.array(plane.get("origin") or [0, 0, 0], float)      # plane offset, e.g. (0, 0, 0.5) for hk½
     n = np.array(structure.supercell)
     keep = ~info["is_void"]
     x = structure.frac[keep] * n                       # unit-cell fractions
@@ -607,7 +608,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     npts = len(t)
     I = np.zeros((npts, npts))
     for a, ta in enumerate(t):
-        H = ta * u[None, :] + t[:, None] * v[None, :]          # (npts, 3)
+        H = o[None, :] + ta * u[None, :] + t[:, None] * v[None, :]   # (npts, 3)
         ph = np.exp(2j * np.pi * (loc @ H.T)) * f[:, None]      # (atoms, npts)
         Fc = np.zeros((ncell, npts), complex)
         np.add.at(Fc, cid, ph)
@@ -615,13 +616,13 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
         F = (lat * Fc).sum(axis=0)
         Fav = (lat * Fc.mean(axis=0)[None, :]).sum(axis=0)
         I[a] = (np.abs(F) ** 2 - np.abs(Fav) ** 2) / ncell
-    np.savez(out / "numpy_preview_plane.npz", t=t, u=u, v=v, intensity=I)
+    np.savez(out / "numpy_preview_plane.npz", t=t, u=u, v=v, origin=o, intensity=I)
     fig, ax = plt.subplots(figsize=(6, 5.2))
     vmax = np.percentile(np.abs(I), 99.5) or 1.0
     im = ax.imshow(I.T, origin="lower", extent=[-R, R, -R, R], cmap="magma", vmin=0, vmax=vmax)
     ax.set_xlabel(f"along [{' '.join(f'{x:g}' for x in u)}] (r.l.u.)")
     ax.set_ylabel(f"along [{' '.join(f'{x:g}' for x in v)}] (r.l.u.)")
-    ax.set_title("numpy preview: diffuse intensity (f = Z)")
+    ax.set_title("numpy preview: diffuse intensity (f = Z)" + (f", offset [{' '.join(f'{x:g}' for x in o)}]" if np.any(o) else ""))
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
     fig.savefig(out / "numpy_preview_plane.png", dpi=130)

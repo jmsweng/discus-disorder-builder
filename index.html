@@ -146,6 +146,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-variant-numeric: tabula
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .stats { font-family: var(--f-mono); font-size: 12px; color: var(--muted); display: grid; gap: 2px; }
+.plane-vecs .trio input { width: 64px; }
+.custom-plane summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .heat-axes { font-family: var(--f-mono); font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
 .progress { height: 3px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .1s; }
@@ -195,6 +197,13 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
         <label class="f"><span>± range</span><input type="number" id="pv-range" step="0.5" min="0.5" class="w-s"></label>
         <label class="f"><span>cells/axis</span><input type="number" id="pv-n" step="1" min="2" max="16" class="w-s"></label>
         <label class="f"><span>crystals averaged</span><input type="number" id="pv-d" step="1" min="1" max="16" class="w-s"></label></div>
+      <details class="custom-plane"><summary>Custom plane</summary>
+        <div class="fields plane-vecs">
+          <label class="f"><span>u (→)</span><span class="trio"><input type="number" step="any" id="pv-u-0"><input type="number" step="any" id="pv-u-1"><input type="number" step="any" id="pv-u-2"></span></label>
+          <label class="f"><span>v (↑)</span><span class="trio"><input type="number" step="any" id="pv-v-0"><input type="number" step="any" id="pv-v-1"><input type="number" step="any" id="pv-v-2"></span></label>
+          <label class="f"><span>offset</span><span class="trio"><input type="number" step="any" id="pv-origin-0"><input type="number" step="any" id="pv-origin-1"><input type="number" step="any" id="pv-origin-2"></span></label>
+        </div></details>
+      <p class="hint" id="pinfo"></p>
       <div class="progress" id="dprog"><span></span></div>
       <canvas id="dcv" style="width:100%;aspect-ratio:1;image-rendering:pixelated;border-radius:4px;background:var(--view);max-width:100%"></canvas>
       <div class="heat-axes" id="daxes"></div>
@@ -798,6 +807,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     import matplotlib.pyplot as plt
     plane = plane or cfg.get("calc", {}).get("preview", {"u": [1, 0, 0], "v": [0, 1, 0], "range": 6})
     u, v, R = np.array(plane["u"], float), np.array(plane["v"], float), float(plane["range"])
+    o = np.array(plane.get("origin") or [0, 0, 0], float)      # plane offset, e.g. (0, 0, 0.5) for hk½
     n = np.array(structure.supercell)
     keep = ~info["is_void"]
     x = structure.frac[keep] * n                       # unit-cell fractions
@@ -812,7 +822,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     npts = len(t)
     I = np.zeros((npts, npts))
     for a, ta in enumerate(t):
-        H = ta * u[None, :] + t[:, None] * v[None, :]          # (npts, 3)
+        H = o[None, :] + ta * u[None, :] + t[:, None] * v[None, :]   # (npts, 3)
         ph = np.exp(2j * np.pi * (loc @ H.T)) * f[:, None]      # (atoms, npts)
         Fc = np.zeros((ncell, npts), complex)
         np.add.at(Fc, cid, ph)
@@ -820,13 +830,13 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
         F = (lat * Fc).sum(axis=0)
         Fav = (lat * Fc.mean(axis=0)[None, :]).sum(axis=0)
         I[a] = (np.abs(F) ** 2 - np.abs(Fav) ** 2) / ncell
-    np.savez(out / "numpy_preview_plane.npz", t=t, u=u, v=v, intensity=I)
+    np.savez(out / "numpy_preview_plane.npz", t=t, u=u, v=v, origin=o, intensity=I)
     fig, ax = plt.subplots(figsize=(6, 5.2))
     vmax = np.percentile(np.abs(I), 99.5) or 1.0
     im = ax.imshow(I.T, origin="lower", extent=[-R, R, -R, R], cmap="magma", vmin=0, vmax=vmax)
     ax.set_xlabel(f"along [{' '.join(f'{x:g}' for x in u)}] (r.l.u.)")
     ax.set_ylabel(f"along [{' '.join(f'{x:g}' for x in v)}] (r.l.u.)")
-    ax.set_title("numpy preview: diffuse intensity (f = Z)")
+    ax.set_title("numpy preview: diffuse intensity (f = Z)" + (f", offset [{' '.join(f'{x:g}' for x in o)}]" if np.any(o) else ""))
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
     fig.savefig(out / "numpy_preview_plane.png", dpi=130)
@@ -1352,7 +1362,7 @@ function diffusePlaneRows(real, plane) {
   });
   const step = 1 / Math.max(...n), m = Math.round(plane.range / step), t = [];
   for (let k = -m; k <= m; k++) t.push(k * step);
-  const P = t.length, u = plane.u, v = plane.v;
+  const P = t.length, u = plane.u.map(Number), v = plane.v.map(Number), o = (plane.origin || [0, 0, 0]).map(x => +x || 0);
   const Fr = new Float64Array(ncell * P), Fi = new Float64Array(ncell * P);
   const rows = [];
   function row(a) {
@@ -1360,12 +1370,12 @@ function diffusePlaneRows(real, plane) {
     const ta = t[a];
     for (let i = 0; i < atoms.length; i++) {
       const base = cid[i] * P, x = loc[3 * i], y = loc[3 * i + 1], z = loc[3 * i + 2];
-      const p0 = ta * (u[0] * x + u[1] * y + u[2] * z), dp = v[0] * x + v[1] * y + v[2] * z;
+      const p0 = o[0] * x + o[1] * y + o[2] * z + ta * (u[0] * x + u[1] * y + u[2] * z), dp = v[0] * x + v[1] * y + v[2] * z;
       for (let b = 0; b < P; b++) { const ph = 2 * Math.PI * (p0 + t[b] * dp); Fr[base + b] += f[i] * Math.cos(ph); Fi[base + b] += f[i] * Math.sin(ph); }
     }
     const out = new Float64Array(P);
     for (let b = 0; b < P; b++) {
-      const H = [ta * u[0] + t[b] * v[0], ta * u[1] + t[b] * v[1], ta * u[2] + t[b] * v[2]];
+      const H = [o[0] + ta * u[0] + t[b] * v[0], o[1] + ta * u[1] + t[b] * v[1], o[2] + ta * u[2] + t[b] * v[2]];
       let sr = 0, si = 0, mr = 0, mi = 0, lr = 0, li = 0;
       for (let c = 0; c < ncell; c++) {
         const cx = c % n[0], cy = Math.floor(c / n[0]) % n[1], cz = Math.floor(c / (n[0] * n[1]));
@@ -1528,7 +1538,7 @@ function base() {
       fourier: { enabled: true, steps: [0.1, 0.1, 0.1], hmax: [3, 3, 3], aver_percent: 100, delta_pdf: true, total: false, symmetry: "",
         lots: { enabled: false, shape: "box", size: [5, 5, 5], count: "all", periodic: true } },
       pdf: { enabled: true, radiation: "xray", qmin: 0.5, qmax: 7.5, dq: 0.01, qsig: 0, rmax: 20, dr: 0.02, wavelength: "" },
-      preview: { u: [1, 0, 0], v: [0, 1, 0], range: 4 } },
+      preview: { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 } },
   };
 }
 
@@ -1804,6 +1814,7 @@ function commit({ render = true, preview = true } = {}) {
   save();
   try { validation = DB.validate(S); } catch (e) { validation = { errs: [e.message], warns: [] }; }
   renderStatus();
+  const pi = $("#pinfo"); if (pi) pi.textContent = planeInfo();
   if (render) renderSection();
   if (preview) schedulePreview();
   markDiffuseStale();
@@ -2291,8 +2302,11 @@ const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
   "pv-n": "Size of each random preview crystal (cells per axis, at most the supercell).",
   "pv-d": "Number of independent random crystals averaged; more crystals, less speckle.",
+  "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
+  "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
 };
+["u", "v", "origin"].forEach(k => [1, 2].forEach(i => { TIPS_ID[`pv-${k}-${i}`] = TIPS_ID[`pv-${k}-0`]; }));
 function applyTips(root) {
   $$("[data-b]", root).forEach(el => {
     const hit = TIPS_B.find(([re]) => re.test(el.dataset.b));
@@ -2380,8 +2394,8 @@ const ACT = {
   "cells": el => { cellsShown = +el.dataset.v; drawCrystal(); $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown))); },
   "color": el => { colorMode = el.dataset.v; drawCrystal(); $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode))); },
   "diffuse": () => (diffuseRunning ? cancelDiffuse() : runDiffuse()),
-  "plane": el => { const v = el.dataset.v; const P = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] }[v];
-    S.calc.preview.u = P[0]; S.calc.preview.v = P[1]; save(); renderBenchControls(); markDiffuseStale(); },
+  "plane": el => { const v = el.dataset.v; const P = PLANES[v];
+    S.calc.preview.u = P[0].slice(); S.calc.preview.v = P[1].slice(); S.calc.preview.origin = [0, 0, 0]; save(); renderBenchControls(); markDiffuseStale(); },
 };
 function download(name, text, type) {
   try {
@@ -2402,7 +2416,13 @@ function toast(m) { let el = $("#toast"); el.textContent = m; el.hidden = false;
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "file-in") { importFile(el.files[0]); el.value = ""; return; }
-  if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); markDiffuseStale(); return; }
+  if (/^pv-(u|v|origin)-\d$/.test(el.id)) {
+    const [, k, i] = /^pv-(u|v|origin)-(\d)$/.exec(el.id); const x = +el.value;
+    S.calc.preview[k][+i] = isFinite(x) ? x : 0;
+    if (S.calc.preview.u.every(q => q === 0) || S.calc.preview.v.every(q => q === 0)) toast("u and v must not be zero vectors");
+    save(); renderBenchControls(); markDiffuseStale(); return;
+  }
+  if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); renderBenchControls(); markDiffuseStale(); return; }
   const path = el.dataset.b; if (!path) return;
   let v = el.value;
   const t = el.dataset.t;
@@ -2498,13 +2518,37 @@ function drawCrystal() {
 // diffuse
 let diffuseJob = 0;
 function markDiffuseStale() { const s = $("#dstate"); if (s && !s.dataset.running) s.textContent = "Model changed: compute again to update."; }
+const PLANES = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
 function renderBenchControls() {
   const pv = S.calc.preview;
-  const key = JSON.stringify([pv.u, pv.v]);
-  const names = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
-  $("#planes").innerHTML = Object.entries(names).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${JSON.stringify(v) === key}">${k === "hhl" ? "hhl" : k}</button>`).join("");
+  if (!pv.origin) pv.origin = [0, 0, 0];
+  const key = JSON.stringify([pv.u.map(Number), pv.v.map(Number)]), atOrigin = pv.origin.every(x => +x === 0);
+  $("#planes").innerHTML = Object.entries(PLANES).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${atOrigin && JSON.stringify(v) === key}">${k}</button>`).join("");
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
+  ["u", "v", "origin"].forEach(k => [0, 1, 2].forEach(i => { $(`#pv-${k}-${i}`).value = pv[k][i]; }));
+  $("#pinfo").textContent = planeInfo();
   applyTips($("#planes"));
+}
+// how the preview plane relates to the DISCUS grid of the Calculations step, and whether it is commensurate
+function planeInfo() {
+  const pv = S.calc.preview, u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
+  const n = previewN(), notes = [];
+  const isInt = x => Math.abs(x - Math.round(x)) < 1e-9;
+  if (![...u, ...v].every(isInt)) notes.push("u or v is not a whole-number vector, so the points are not commensurate with the crystal: expect ripples.");
+  if (!o.every((x, k) => isInt(x * n[k]))) notes.push(`The offset is not a multiple of 1/${n.join(", 1/")} (the preview crystal), so it falls between allowed points: expect ripples.`);
+  const unit = w => { const nz = w.map((x, k) => [x, k]).filter(([x]) => x !== 0); return nz.length === 1 && nz[0][0] === 1 ? nz[0][1] : -1; };
+  const i = unit(u), j = unit(v), f = S.calc.fourier;
+  if (i < 0 || j < 0 || i === j) notes.push("Oblique plane: it is not one slice of the DISCUS 3D grid; compare it by eye.");
+  else {
+    const k = 3 - i - j, hkl = "hkl";
+    if (o[i] || o[j]) notes.push("An offset within the plane only shifts the window; the DISCUS slices are centred on 0.");
+    const step = +f.steps[k], idx = o[k] / step, half = Math.round(+f.hmax[k] / step);
+    if (!f.enabled) notes.push(`Same cut as the ${hkl[k]} = ${fmt(o[k], 4)} slice of a 3D grid (3D diffuse is switched off).`);
+    else if (!isInt(idx)) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is not on the DISCUS grid (step ${fmt(step, 4)} along ${hkl[k]}).`);
+    else if (Math.abs(idx) > half) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is outside the DISCUS grid (±${fmt(+f.hmax[k], 3)}).`);
+    else notes.push(`Same cut as the DISCUS slice ${hkl[k]} = ${fmt(o[k], 4)}: index ${Math.round(idx) + half} along array axis ${k} of diffuse.npz.`);
+  }
+  return notes.join(" ");
 }
 let diffuseRunning = null;
 function setDiffuseButton(running) {
@@ -2529,7 +2573,7 @@ function runDiffuse() {
   const t0 = performance.now();
   const start = () => {
     real = DB.realize(S, { n: previewN(), seed: (+S.seed || 1) + 7919 * previewSeed + 104729 * d, maxSweeps: 60 });
-    plane = DB.diffusePlaneRows(real, { u: pv.u, v: pv.v, range: +pv.range || 4 });
+    plane = DB.diffusePlaneRows(real, { u: pv.u, v: pv.v, origin: pv.origin, range: +pv.range || 4 });
     if (!sum) { P = plane.P; sum = new Float64Array(P * P); }
     natoms = real.atoms.length; a = 0;
   };
@@ -2564,8 +2608,9 @@ function drawHeat(img, P, t) {
     id.data[o] = c[0]; id.data[o + 1] = c[1]; id.data[o + 2] = c[2]; id.data[o + 3] = 255;
   }
   g.putImageData(id, 0, 0);
-  const pv = S.calc.preview, lab = v => `[${v.join(" ")}]`;
-  $("#daxes").innerHTML = `<span>${fmt(t[0], 2)}</span><span>→ ${lab(pv.u)} (r.l.u.) · ↑ ${lab(pv.v)}</span><span>${fmt(t[t.length - 1], 2)}</span>`;
+  const pv = S.calc.preview, lab = v => `[${v.map(x => fmt(+x, 3)).join(" ")}]`;
+  const off = (pv.origin || [0, 0, 0]).some(x => +x) ? ` · offset ${lab(pv.origin)}` : "";
+  $("#daxes").innerHTML = `<span>${fmt(t[0], 2)}</span><span>→ ${lab(pv.u)} · ↑ ${lab(pv.v)}${off}</span><span>${fmt(t[t.length - 1], 2)}</span>`;
 }
 
 // ------------------------------------------------------------------------------------------ boot

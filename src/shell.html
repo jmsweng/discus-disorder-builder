@@ -36,6 +36,13 @@
         <label class="f"><span>± range</span><input type="number" id="pv-range" step="0.5" min="0.5" class="w-s"></label>
         <label class="f"><span>cells/axis</span><input type="number" id="pv-n" step="1" min="2" max="16" class="w-s"></label>
         <label class="f"><span>crystals averaged</span><input type="number" id="pv-d" step="1" min="1" max="16" class="w-s"></label></div>
+      <details class="custom-plane"><summary>Custom plane</summary>
+        <div class="fields plane-vecs">
+          <label class="f"><span>u (→)</span><span class="trio"><input type="number" step="any" id="pv-u-0"><input type="number" step="any" id="pv-u-1"><input type="number" step="any" id="pv-u-2"></span></label>
+          <label class="f"><span>v (↑)</span><span class="trio"><input type="number" step="any" id="pv-v-0"><input type="number" step="any" id="pv-v-1"><input type="number" step="any" id="pv-v-2"></span></label>
+          <label class="f"><span>offset</span><span class="trio"><input type="number" step="any" id="pv-origin-0"><input type="number" step="any" id="pv-origin-1"><input type="number" step="any" id="pv-origin-2"></span></label>
+        </div></details>
+      <p class="hint" id="pinfo"></p>
       <div class="progress" id="dprog"><span></span></div>
       <canvas id="dcv" style="width:100%;aspect-ratio:1;image-rendering:pixelated;border-radius:4px;background:var(--view);max-width:100%"></canvas>
       <div class="heat-axes" id="daxes"></div>

@@ -369,7 +369,7 @@ function diffusePlaneRows(real, plane) {
   });
   const step = 1 / Math.max(...n), m = Math.round(plane.range / step), t = [];
   for (let k = -m; k <= m; k++) t.push(k * step);
-  const P = t.length, u = plane.u, v = plane.v;
+  const P = t.length, u = plane.u.map(Number), v = plane.v.map(Number), o = (plane.origin || [0, 0, 0]).map(x => +x || 0);
   const Fr = new Float64Array(ncell * P), Fi = new Float64Array(ncell * P);
   const rows = [];
   function row(a) {
@@ -377,12 +377,12 @@ function diffusePlaneRows(real, plane) {
     const ta = t[a];
     for (let i = 0; i < atoms.length; i++) {
       const base = cid[i] * P, x = loc[3 * i], y = loc[3 * i + 1], z = loc[3 * i + 2];
-      const p0 = ta * (u[0] * x + u[1] * y + u[2] * z), dp = v[0] * x + v[1] * y + v[2] * z;
+      const p0 = o[0] * x + o[1] * y + o[2] * z + ta * (u[0] * x + u[1] * y + u[2] * z), dp = v[0] * x + v[1] * y + v[2] * z;
       for (let b = 0; b < P; b++) { const ph = 2 * Math.PI * (p0 + t[b] * dp); Fr[base + b] += f[i] * Math.cos(ph); Fi[base + b] += f[i] * Math.sin(ph); }
     }
     const out = new Float64Array(P);
     for (let b = 0; b < P; b++) {
-      const H = [ta * u[0] + t[b] * v[0], ta * u[1] + t[b] * v[1], ta * u[2] + t[b] * v[2]];
+      const H = [o[0] + ta * u[0] + t[b] * v[0], o[1] + ta * u[1] + t[b] * v[1], o[2] + ta * u[2] + t[b] * v[2]];
       let sr = 0, si = 0, mr = 0, mi = 0, lr = 0, li = 0;
       for (let c = 0; c < ncell; c++) {
         const cx = c % n[0], cy = Math.floor(c / n[0]) % n[1], cz = Math.floor(c / (n[0] * n[1]));
