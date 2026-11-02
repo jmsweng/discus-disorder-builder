@@ -304,15 +304,18 @@ function perOccupant() {
     const p = `sites.${si}.occupants.${oi}`;
     const g = o.type === "molecule" ? S.orientations.find(x => x.id === o.group) : null;
     const name = o.type === "atom" ? esc(o.species) : `${esc(g ? g.name : "?")} <span class="tag">molecule</span>`;
-    const dflt = o.type === "atom" ? `${+d.atomic_displacements[o.species] || 0}` : "element";
-    const inp = (k, ph, tip) => `<input type="number" step="any" min="0" class="w-s" data-b="${p}.${k}" data-t="numornull" value="${esc(o[k] == null ? "" : o[k])}" placeholder="${esc(ph)}" title="${esc(tip)}">`;
+    const els = o.type === "molecule" && g ? [...new Set(((S.molecules.find(m => m.id === g.molecule) || {}).atoms || []).map(x => x.el))] : [];
+    const dflt = o.type === "atom" ? `${+d.atomic_displacements[o.species] || 0}` : "default";
+    const sigTip = o.type === "atom" ? "Gaussian displacement of this atom (Å). Empty: the element default above."
+      : `Gaussian displacement of every atom of this molecule (Å). Empty: each element's default above (${els.map(e => `${e} ${+d.atomic_displacements[e] || 0}`).join(", ") || "none"}).`;
+    const inp = (k, ph, tip) => `<input type="number" step="any" min="0" class="w-po" data-b="${p}.${k}" data-t="numornull" value="${esc(o[k] == null ? "" : o[k])}" placeholder="${esc(ph)}" title="${esc(tip)}">`;
     rows.push(`<tr><td>${esc(s.label)}</td><td>${name}</td><td class="num">${fmt(+o.p, 3)}</td>
-      <td>${inp("sigma", dflt, "Gaussian displacement of each atom of this occupant (Å). Empty: the element default above.")}</td>
+      <td>${inp("sigma", dflt, sigTip)}</td>
       <td>${o.type === "molecule" ? inp("trans", `${+rig.translation_sigma || 0}`, "Gaussian shift of the whole molecule (Å). Empty: the default above.") : ""}</td>
       <td>${o.type === "molecule" ? inp("lib", `${+rig.libration_sigma_deg || 0}`, "Gaussian rotation of the whole molecule about a random axis (°). Empty: the default above.") : ""}</td></tr>`);
   }));
   return `<div class="block"><h3>Per site and occupant</h3>
-    <p class="hint">Different amounts of disorder for each atom or molecule in the cell. An empty field uses the default shown in grey; a value replaces it for that occupant only (0 switches it off).</p>
+    <p class="hint">Different amounts of disorder for each atom or molecule in the cell. An empty field uses the default shown in grey (“default” for a molecule's atoms means each element's own value above); a value replaces it for that occupant only (0 switches it off).</p>
     ${rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Occupant</th><th>p</th><th>Atomic σ (Å)</th><th>Translation σ (Å)</th><th>Libration σ (°)</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>` : '<p class="hint">No occupants yet.</p>'}</div>`;
 }
 
@@ -609,7 +612,7 @@ const ACT = {
   "reseed": () => { previewSeed++; updatePreview(); },
   "cells": el => { cellsShown = +el.dataset.v; drawCrystal(); $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown))); },
   "color": el => { colorMode = el.dataset.v; drawCrystal(); $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode))); },
-  "diffuse": () => runDiffuse(),
+  "diffuse": () => (diffuseRunning ? cancelDiffuse() : runDiffuse()),
   "plane": el => { const v = el.dataset.v; const P = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] }[v];
     S.calc.preview.u = P[0]; S.calc.preview.v = P[1]; save(); renderBenchControls(); markDiffuseStale(); },
 };
@@ -736,6 +739,21 @@ function renderBenchControls() {
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
   applyTips($("#planes"));
 }
+let diffuseRunning = null;
+function setDiffuseButton(running) {
+  const b = $("#dbtn"); if (!b) return;
+  b.textContent = running ? "Cancel" : "Compute";
+  b.classList.toggle("primary", !running);
+  b.title = running ? "Stop the calculation and keep the average of the crystals finished so far." : TIPS_A.diffuse;
+}
+function cancelDiffuse() {
+  if (!diffuseRunning) return;
+  diffuseJob++;
+  const { done, draws } = diffuseRunning();
+  diffuseRunning = null; setDiffuseButton(false);
+  const st = $("#dstate"); delete st.dataset.running;
+  st.textContent = done ? `Cancelled after ${done} of ${draws} crystals; the plot shows their average.` : "Cancelled before the first crystal finished.";
+}
 function runDiffuse() {
   const job = ++diffuseJob;
   const pv = S.calc.preview, draws = Math.max(1, Math.min(16, +pv.draws || 4));
@@ -750,6 +768,7 @@ function runDiffuse() {
   };
   try { start(); } catch (e) { toast(e.message); return; }
   st.dataset.running = "1"; st.textContent = `Computing ${P}×${P} points, ${draws} random crystals of ${natoms} atoms…`;
+  diffuseRunning = () => ({ done: d, draws }); setDiffuseButton(true);
   const step = () => {
     if (job !== diffuseJob) return;
     const tEnd = performance.now() + 30;
@@ -757,7 +776,7 @@ function runDiffuse() {
     bar.style.width = `${100 * (d * P + a) / (draws * P)}%`;
     if (a >= P) { d++; drawHeat(Float64Array.from(sum, x => x / d), P, plane.t); if (d < draws) { start(); } }
     if (d < draws) requestAnimationFrame(step);
-    else { delete st.dataset.running; st.textContent = `Average of ${draws} random ${real.n.join("×")} crystals (${natoms} atoms each), ${((performance.now() - t0) / 1000).toFixed(1)} s. f = Z, no Debye–Waller: a shape check, not the DISCUS result.`; }
+    else { diffuseRunning = null; setDiffuseButton(false); delete st.dataset.running; st.textContent = `Average of ${draws} random ${real.n.join("×")} crystals (${natoms} atoms each), ${((performance.now() - t0) / 1000).toFixed(1)} s. f = Z, no Debye–Waller: a shape check, not the DISCUS result.`; }
   };
   requestAnimationFrame(step);
 }

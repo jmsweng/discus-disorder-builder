@@ -65,7 +65,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .f > span { font-size: 12px; letter-spacing: .01em; color: var(--muted); }
 input[type="number"], input[type="text"], select, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; min-width: 0; }
 input[type="number"] { width: 92px; font-family: var(--f-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
-input.w-s { width: 64px; } input.w-l { width: 200px; } input.w-xl { width: 320px; max-width: 100%; }
+input.w-s { width: 64px; } .tbl input.w-po[type="number"] { width: 100px; } input.w-l { width: 200px; } input.w-xl { width: 320px; max-width: 100%; }
 textarea { font-family: var(--f-mono); font-size: 12.5px; width: 100%; resize: vertical; }
 input:disabled, select:disabled { opacity: .55; }
 label.chk { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
