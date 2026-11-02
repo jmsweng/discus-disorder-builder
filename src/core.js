@@ -505,6 +505,65 @@ function diffusePlaneRows(real, plane) {
   return { t, P, row };
 }
 
+// ---------------------------------------------------------------------------------- plane geometry
+// Reciprocal vectors (Å⁻¹, 2π convention) of hkl directions u and v, expressed in an orthonormal basis of the
+// plane: e1 along u. Used to draw a preview plane with its true proportions and angle.
+function planeGeometry(A, u, v) {
+  const B = tr(inv(A)).map(r => r.map(x => 2 * Math.PI * x));        // rows a*, b*, c*
+  const g = h => [0, 1, 2].map(k => h[0] * B[0][k] + h[1] * B[1][k] + h[2] * B[2][k]);
+  const gu = g(u.map(Number)), gv = g(v.map(Number));
+  const lu = norm(gu), lv = norm(gv);
+  if (!(lu > 0) || !(lv > 0)) throw new Error("u and v must not be zero");
+  const e1 = scale(gu, 1 / lu), x = gv[0] * e1[0] + gv[1] * e1[1] + gv[2] * e1[2];
+  const perp = sub(gv, scale(e1, x)), y = norm(perp);
+  if (y < 1e-9 * lv) throw new Error("u and v are parallel");
+  return { u2: [lu, 0], v2: [x, y], lu, lv, angle: Math.acos(Math.max(-1, Math.min(1, x / lv))) * 180 / Math.PI };
+}
+function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) [a, b] = [b, a % b]; return a; }
+// Reciprocal-lattice layer {H : H · [n] = L} for an integer direction n = [n1 n2 n3]: a reduced integer basis
+// u, v of the layer (shortest vectors in Å⁻¹) and an offset point of the layer.
+function zonePlane(A, n, L = 0) {
+  n = n.map(x => Math.round(+x));
+  if (n.every(x => x === 0)) throw new Error("the plane normal must not be 0 0 0");
+  const B = tr(inv(A));
+  const len = h => norm([0, 1, 2].map(k => h[0] * B[0][k] + h[1] * B[1][k] + h[2] * B[2][k]));
+  const R = 8, cand = [];
+  for (let h = -R; h <= R; h++) for (let k = -R; k <= R; k++) for (let l = -R; l <= R; l++) {
+    if (!h && !k && !l) continue;
+    if (h * n[0] + k * n[1] + l * n[2] === 0) cand.push({ h: [h, k, l], len: len([h, k, l]) });
+  }
+  if (cand.length < 2) throw new Error("no lattice vectors in this plane within ±8; use smaller indices");
+  const g = gcd(gcd(n[0], n[1]), n[2]), target = n.map(x => x / g);
+  cand.sort((a, b) => a.len - b.len || (b.h[0] - a.h[0]) || (b.h[1] - a.h[1]) || (b.h[2] - a.h[2]));
+  const u = cand[0].h;
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // v: shortest vector that completes u to a basis of the layer, preferring an obtuse-free (reduced) angle
+  let v = null;
+  for (const c of cand) {
+    const x = cross(u, c.h);
+    if (x.every((q, i) => q === target[i]) || x.every((q, i) => q === -target[i])) {
+      const w = x.every((q, i) => q === target[i]) ? c.h : c.h.map(q => -q);
+      if (!v || c.len < v.len - 1e-9) v = { h: w, len: c.len };
+    }
+  }
+  if (!v) throw new Error("could not find a basis for this plane");
+  // prefer the acute pair (60° rather than 120°); u + v spans the same layer with the same handedness
+  const g3 = h => [0, 1, 2].map(k => h[0] * B[0][k] + h[1] * B[1][k] + h[2] * B[2][k]);
+  const gu = g3(u), gv = g3(v.h);
+  if (gu[0] * gv[0] + gu[1] * gv[1] + gu[2] * gv[2] < -1e-12) { const w = v.h.map((q, i) => q + u[i]); if (len(w) <= v.len + 1e-9) v = { h: w, len: len(w) }; }
+  // offset: an integer point of layer L if one exists (L a multiple of gcd), else L·n/|n|²
+  let origin = [0, 0, 0];
+  if (+L) {
+    let best = null;
+    if (Number.isInteger(+L) && +L % g === 0) {
+      for (let h = -R; h <= R; h++) for (let k = -R; k <= R; k++) for (let l = -R; l <= R; l++)
+        if (h * n[0] + k * n[1] + l * n[2] === +L) { const d = len([h, k, l]); if (!best || d < best.d) best = { h: [h, k, l], d }; }
+    }
+    origin = best ? best.h : n.map(x => +((+L * x) / (n[0] * n[0] + n[1] * n[1] + n[2] * n[2])).toFixed(6));
+  }
+  return { u, v: v.h, origin };
+}
+
 // ---------------------------------------------------------------------------------- validation
 function validate(state) {
   const errs = [], warns = [];
@@ -638,6 +697,6 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, realize, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, realize, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);

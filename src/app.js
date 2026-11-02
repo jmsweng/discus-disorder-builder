@@ -587,18 +587,20 @@ const TIPS_A = {
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
   "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
-  "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.",
+  "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
 };
 const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
   "pv-n": "Size of each random preview crystal (cells per axis, at most the supercell).",
   "pv-d": "Number of independent random crystals averaged; more crystals, less speckle.",
   "vdw-scale": "Multiply the van der Waals sums by this (e.g. 0.9 to allow slightly closer contacts).",
+  "pv-n-0": "Plane by indices: all points H with h·n₁ + k·n₂ + l·n₃ = layer, i.e. the reciprocal-space plane perpendicular to the real-space direction [n₁ n₂ n₃] (for cubic cells: perpendicular to [h k l]*). (1 1 1) with layer 0 is the (111) section through the origin.",
+  "pv-L": "Which parallel layer: 0 goes through the origin, 1 through the next layer of reciprocal-lattice points, fractions in between.",
   "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
   "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
 };
-["u", "v", "origin"].forEach(k => [1, 2].forEach(i => { TIPS_ID[`pv-${k}-${i}`] = TIPS_ID[`pv-${k}-0`]; }));
+["u", "v", "origin", "n"].forEach(k => [1, 2].forEach(i => { TIPS_ID[`pv-${k}-${i}`] = TIPS_ID[`pv-${k}-0`]; }));
 function applyTips(root) {
   $$("[data-b]", root).forEach(el => {
     const hit = TIPS_B.find(([re]) => re.test(el.dataset.b));
@@ -691,6 +693,16 @@ const ACT = {
   "tg-add": () => { const sp = allSpecies(); S.mmc.targets.push({ type: "occupational", neighborhood: 0, a: sp[0] || "Cu", b: sp[1] || sp[0] || "Au", mode: "energy", value: 0.5, direction: [1, 0, 0], distance: 2.5, k: 1, depth: 1 }); commit(); },
   "tg-del": el => { S.mmc.targets.splice(+el.dataset.v, 1); commit(); },
   "launcher": el => { S.calc.launcher = el.dataset.v === "wsl" ? "wsl.exe -d Ubuntu-22.04 -- bash -lc 'discus_suite -noautorun -macro \"$0\"'" : "discus_suite -noautorun -macro"; commit(); },
+  "plane-hkl": () => {
+    const nrm = [0, 1, 2].map(i => +$(`#pv-n-${i}`).value || 0), L = +$("#pv-L").value || 0, Al = lattice();
+    if (!Al) { toast("Fix the unit cell first"); return; }
+    try {
+      const p = DB.zonePlane(Al, nrm, L);
+      Object.assign(S.calc.preview, { u: p.u, v: p.v, origin: p.origin, normal: nrm, layer: L });
+      save(); renderBenchControls(); markDiffuseStale();
+      toast(`(${nrm.join(" ")}) layer ${L}: u = [${p.u.join(" ")}], v = [${p.v.join(" ")}]. Press Compute.`);
+    } catch (e) { toast(e.message); }
+  },
   "step-commensurate": () => { S.calc.fourier.steps = S.supercell.map(n => +(1 / +n).toFixed(10)); commit(); },
   "dl-script": () => { try { download(`${fileBase()}.py`, DB.generateScript(withState(), TEMPLATE), "text/x-python"); } catch (e) { toast(e.message); } },
   "copy-script": () => copyText(DB.generateScript(withState(), TEMPLATE)),
@@ -838,6 +850,7 @@ function renderBenchControls() {
   $("#planes").innerHTML = Object.entries(PLANES).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${atOrigin && JSON.stringify(v) === key}">${k}</button>`).join("");
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
   ["u", "v", "origin"].forEach(k => [0, 1, 2].forEach(i => { $(`#pv-${k}-${i}`).value = pv[k][i]; }));
+  if (pv.normal) { [0, 1, 2].forEach(i => { $(`#pv-n-${i}`).value = pv.normal[i]; }); $("#pv-L").value = pv.layer || 0; }
   $("#pinfo").textContent = planeInfo();
   applyTips($("#planes"));
 }
@@ -880,12 +893,13 @@ function cancelDiffuse() {
 function runDiffuse() {
   const job = ++diffuseJob;
   const pv = S.calc.preview, draws = Math.max(1, Math.min(16, +pv.draws || 4));
-  let real, plane, P, sum, d = 0, a = 0, natoms = 0;
+  let real, plane, P, sum, geom = null, d = 0, a = 0, natoms = 0;
   const st = $("#dstate"), bar = $("#dprog span");
   const t0 = performance.now();
   const start = () => {
     real = DB.realize(S, { n: previewN(), seed: (+S.seed || 1) + 7919 * previewSeed + 104729 * d, maxSweeps: 60 });
     plane = DB.diffusePlaneRows(real, { u: pv.u, v: pv.v, origin: pv.origin, range: +pv.range || 4 });
+    if (!geom) geom = { ...DB.planeGeometry(real.A, pv.u, pv.v), u: pv.u.slice(), v: pv.v.slice(), origin: (pv.origin || [0, 0, 0]).slice() };
     if (!sum) { P = plane.P; sum = new Float64Array(P * P); }
     natoms = real.atoms.length; a = 0;
   };
@@ -897,7 +911,7 @@ function runDiffuse() {
     const tEnd = performance.now() + 30;
     while (a < P && performance.now() < tEnd) { const r = plane.row(a); for (let b = 0; b < P; b++) sum[a * P + b] += r[b]; a++; }
     bar.style.width = `${100 * (d * P + a) / (draws * P)}%`;
-    if (a >= P) { d++; drawHeat(Float64Array.from(sum, x => x / d), P, plane.t); if (d < draws) { start(); } }
+    if (a >= P) { d++; drawHeat(Float64Array.from(sum, x => x / d), P, plane.t, geom); if (d < draws) { start(); } }
     if (d < draws) requestAnimationFrame(step);
     else { diffuseRunning = null; setDiffuseButton(false); delete st.dataset.running; st.textContent = `Average of ${draws} random ${real.n.join("×")} crystals (${natoms} atoms each), ${((performance.now() - t0) / 1000).toFixed(1)} s. f = Z, no Debye–Waller: a shape check, not the DISCUS result.`; }
   };
@@ -908,21 +922,56 @@ function magma(t) {
   t = Math.max(0, Math.min(1, t)) * (st.length - 1); const i = Math.min(st.length - 2, Math.floor(t)), f = t - i;
   return st[i].map((x, k) => x + (st[i + 1][k] - x) * f);
 }
-function drawHeat(img, P, t) {
-  const cv = $("#dcv"), g = cv.getContext("2d");
-  cv.width = P; cv.height = P;
+// Draws the plane with its true shape: each grid point is a parallelogram spanned by the reciprocal vectors of
+// u and v (Å⁻¹), so angles and relative lengths are correct; u points to the right.
+let lastHeat = null;
+function drawHeat(img, P, t, geom) {
+  lastHeat = { img, P, t, geom };
   const vals = Array.from(img).filter(x => x > 0).sort((x, y) => x - y);
   const vmax = vals.length ? vals[Math.floor(0.995 * (vals.length - 1))] : 1;
-  const id = g.createImageData(P, P);
+  const off = document.createElement("canvas"); off.width = P; off.height = P;
+  const og = off.getContext("2d"), id = og.createImageData(P, P);
   for (let a = 0; a < P; a++) for (let b = 0; b < P; b++) {
     const v = img[a * P + b], c = magma(Math.sqrt(Math.max(0, v) / (vmax || 1)));
     const o = 4 * ((P - 1 - b) * P + a);
     id.data[o] = c[0]; id.data[o + 1] = c[1]; id.data[o + 2] = c[2]; id.data[o + 3] = 255;
   }
-  g.putImageData(id, 0, 0);
-  const pv = S.calc.preview, lab = v => `[${v.map(x => fmt(+x, 3)).join(" ")}]`;
-  const off = (pv.origin || [0, 0, 0]).some(x => +x) ? ` · offset ${lab(pv.origin)}` : "";
-  $("#daxes").innerHTML = `<span>${fmt(t[0], 2)}</span><span>→ ${lab(pv.u)} · ↑ ${lab(pv.v)}${off}</span><span>${fmt(t[t.length - 1], 2)}</span>`;
+  og.putImageData(id, 0, 0);
+  const cv = $("#dcv"), g = cv.getContext("2d");
+  const W = Math.max(300, Math.round(cv.clientWidth * Math.min(2, window.devicePixelRatio || 1))) || 600;
+  cv.width = W; cv.height = W;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--view").trim() || "#f7f9f9";
+  g.fillRect(0, 0, W, W);
+  const step = t[1] - t[0], t0 = t[0], { u2, v2 } = geom;
+  // plane position (Å⁻¹) of grid indices (a, b); pixel (px, py) of the off-screen image has a = px, b = P-1-py
+  const pos = (a, b) => [(t0 + a * step) * u2[0] + (t0 + b * step) * v2[0], (t0 + a * step) * u2[1] + (t0 + b * step) * v2[1]];
+  const corners = [pos(-0.5, -0.5), pos(P - 0.5, -0.5), pos(-0.5, P - 0.5), pos(P - 0.5, P - 0.5)];
+  const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+  const pad = 30 * (W / 600), sc = Math.min((W - 2 * pad) / (Math.max(...xs) - Math.min(...xs)), (W - 2 * pad) / (Math.max(...ys) - Math.min(...ys)));
+  const cx = W / 2 - sc * (Math.max(...xs) + Math.min(...xs)) / 2, cy = W / 2 + sc * (Math.max(...ys) + Math.min(...ys)) / 2;
+  const scr = p => [cx + sc * p[0], cy - sc * p[1]];
+  const p00 = pos(-0.5, P - 0.5);                      // corner of pixel (0, 0)
+  g.imageSmoothingEnabled = false;
+  g.setTransform(sc * step * u2[0], -sc * step * u2[1], -sc * step * v2[0], sc * step * v2[1], cx + sc * p00[0], cy - sc * p00[1]);
+  g.drawImage(off, 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  // unit arrows along u and v from the plane's own origin (t = 0, 0), and a 1 Å⁻¹ scale bar
+  const o = scr(pos(-t0 / step, -t0 / step)), ink = "#ffffff", lw = Math.max(1.5, W / 300);
+  const arrow = (vec, label) => {
+    const e = [o[0] + sc * vec[0], o[1] - sc * vec[1]], ang = Math.atan2(e[1] - o[1], e[0] - o[0]), h = 8 * W / 600;
+    g.strokeStyle = ink; g.fillStyle = ink; g.lineWidth = lw; g.beginPath(); g.moveTo(o[0], o[1]); g.lineTo(e[0], e[1]); g.stroke();
+    g.beginPath(); g.moveTo(e[0], e[1]); g.lineTo(e[0] - h * Math.cos(ang - 0.4), e[1] - h * Math.sin(ang - 0.4)); g.lineTo(e[0] - h * Math.cos(ang + 0.4), e[1] - h * Math.sin(ang + 0.4)); g.fill();
+    g.font = `${12 * W / 600}px ui-monospace, monospace`; g.fillText(label, e[0] + 4, e[1] - 4);
+  };
+  const lab = v => `[${v.map(x => fmt(+x, 3)).join(" ")}]`;
+  arrow(u2, lab(geom.u)); arrow(v2, lab(geom.v));
+  const ink2 = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim() || "#567";
+  g.strokeStyle = ink2; g.fillStyle = ink2; g.lineWidth = lw;
+  const bx = pad, by = W - pad / 2.5; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + sc, by); g.stroke();
+  g.font = `${11 * W / 600}px ui-monospace, monospace`; g.fillText("1 Å⁻¹", bx + sc + 6, by + 4);
+  const offTxt = (geom.origin || [0, 0, 0]).some(x => +x) ? ` · offset ${lab(geom.origin)}` : "";
+  $("#daxes").innerHTML = `<span>u ${lab(geom.u)} → · v ${lab(geom.v)} at ${fmt(geom.angle, 1)}°${offTxt}</span><span>±${fmt(-t0, 2)} r.l.u.</span>`;
 }
 
 // ------------------------------------------------------------------------------------------ boot
@@ -938,7 +987,7 @@ function boot() {
   applyTips(document);
   updatePreview();
   setTimeout(runDiffuse, 400);
-  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawCrystal(); if (molViewer) drawMolecule(); });
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawCrystal(); if (lastHeat) drawHeat(lastHeat.img, lastHeat.P, lastHeat.t, lastHeat.geom); if (molViewer) drawMolecule(); });
 }
 boot();
 })();

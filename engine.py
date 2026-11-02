@@ -764,17 +764,28 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
         Fav = (lat * Fc.mean(axis=0)[None, :]).sum(axis=0)
         I[a] = (np.abs(F) ** 2 - np.abs(Fav) ** 2) / ncell
     np.savez(out / "numpy_preview_plane.npz", t=t, u=u, v=v, origin=o, intensity=I)
+    # true geometry: grid points at t_a·u* + t_b·v* in an orthonormal basis of the plane (Å⁻¹, 2π convention)
+    B = 2 * np.pi * np.linalg.inv(info["unit_lattice"]).T
+    gu, gv = u @ B, v @ B
+    e1 = gu / np.linalg.norm(gu)
+    e2 = gv - (gv @ e1) * e1
+    e2 /= np.linalg.norm(e2)
+    TA, TB = np.meshgrid(t, t, indexing="ij")
+    X = TA * (gu @ e1) + TB * (gv @ e1)
+    Y = TA * (gu @ e2) + TB * (gv @ e2)
     fig, ax = plt.subplots(figsize=(6, 5.2))
     vmax = np.percentile(np.abs(I), 99.5) or 1.0
-    im = ax.imshow(I.T, origin="lower", extent=[-R, R, -R, R], cmap="magma", vmin=0, vmax=vmax)
-    ax.set_xlabel(f"along [{' '.join(f'{x:g}' for x in u)}] (r.l.u.)")
-    ax.set_ylabel(f"along [{' '.join(f'{x:g}' for x in v)}] (r.l.u.)")
-    ax.set_title("numpy preview: diffuse intensity (f = Z)" + (f", offset [{' '.join(f'{x:g}' for x in o)}]" if np.any(o) else ""))
+    im = ax.pcolormesh(X, Y, I, shading="nearest", cmap="magma", vmin=0, vmax=vmax)
+    ax.set_aspect("equal")
+    lab = lambda w: "[" + " ".join(f"{x:g}" for x in w) + "]"
+    ax.set_xlabel(f"Q along u = {lab(u)} (Å⁻¹)")
+    ax.set_ylabel(f"Q in the plane, normal to u (Å⁻¹); v = {lab(v)}")
+    ax.set_title("numpy preview: diffuse intensity (f = Z)" + (f", offset {lab(o)}" if np.any(o) else ""))
     fig.colorbar(im, ax=ax)
     fig.tight_layout()
     fig.savefig(out / "numpy_preview_plane.png", dpi=130)
     plt.close(fig)
-    log("  wrote numpy_preview_plane.png (approximate: f = Z, non-orthogonal axes drawn square)")
+    log("  wrote numpy_preview_plane.png (approximate: f = Z; true plane geometry)")
 
 
 # ---------------------------------------------------------------------------------------------
