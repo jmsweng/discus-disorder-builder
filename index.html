@@ -2404,7 +2404,10 @@ function renderSection() {
   const fn = RENDER[section];
   const ed = $("#editor");
   const y = window.scrollY;
+  // remember which collapsible parts are open (by their summary text); the editor is rebuilt on every change
+  const open = new Set($$("details[open] > summary", ed).map(s => section + "|" + s.textContent.trim()));
   ed.innerHTML = fn();
+  $$("details > summary", ed).forEach(s => { if (open.has(section + "|" + s.textContent.trim())) s.parentElement.open = true; });
   if (AFTER[section]) AFTER[section]();
   applyTips(ed);
   window.scrollTo(0, y);
@@ -2992,6 +2995,7 @@ const TIPS_A = {
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "wy-pick": "Use this Wyckoff position.", "wy-add": "Add a site at every symmetry-equivalent position (positions that already hold a site are skipped).",
   "sym-clear": "Stop rotating molecules on this site; it then uses the orientation library as it is.", "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
+  "plane-custom": "Highlighted when the plane is not one of the presets (other directions or a non-zero offset). Click to open the custom plane fields.",
 };
 const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
@@ -3142,6 +3146,7 @@ const ACT = {
   "tg-add": () => { const sp = allSpecies(); S.mmc.targets.push({ type: "occupational", neighborhood: 0, a: sp[0] || "Cu", b: sp[1] || sp[0] || "Au", mode: "energy", value: 0.5, direction: [1, 0, 0], distance: 2.5, k: 1, depth: 1 }); commit(); },
   "tg-del": el => { S.mmc.targets.splice(+el.dataset.v, 1); commit(); },
   "launcher": el => { S.calc.launcher = el.dataset.v === "wsl" ? "wsl.exe -d Ubuntu-22.04 -- bash -lc 'discus_suite -noautorun -macro \"$0\"'" : "discus_suite -noautorun -macro"; commit(); },
+  "plane-custom": () => { const d = $(".custom-plane"); d.open = true; d.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
   "plane-hkl": () => {
     const nrm = [0, 1, 2].map(i => +$(`#pv-n-${i}`).value || 0), L = +$("#pv-L").value || 0, Al = lattice();
     if (!Al) { toast("Fix the unit cell first"); return; }
@@ -3314,7 +3319,12 @@ function renderBenchControls() {
   const pv = S.calc.preview;
   if (!pv.origin) pv.origin = [0, 0, 0];
   const key = JSON.stringify([pv.u.map(Number), pv.v.map(Number)]), atOrigin = pv.origin.every(x => +x === 0);
-  $("#planes").innerHTML = Object.entries(PLANES).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${atOrigin && JSON.stringify(v) === key}">${k}</button>`).join("");
+  const preset = atOrigin ? Object.keys(PLANES).find(k => JSON.stringify(PLANES[k]) === key) : null;
+  // build the buttons once and only update their state: replacing them while a field blurs would swallow the click
+  const box = $("#planes");
+  if (!box.children.length) box.innerHTML = Object.keys(PLANES).map(k => `<button type="button" class="btn small" data-a="plane" data-v="${k}">${k}</button>`).join("") +
+    `<button type="button" class="btn small" data-a="plane-custom">custom</button>`;
+  $$("button", box).forEach(b => b.setAttribute("aria-pressed", String(b.dataset.a === "plane-custom" ? !preset : b.dataset.v === preset)));
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
   ["u", "v", "origin"].forEach(k => [0, 1, 2].forEach(i => { $(`#pv-${k}-${i}`).value = pv[k][i]; }));
   if (pv.normal) { [0, 1, 2].forEach(i => { $(`#pv-n-${i}`).value = pv.normal[i]; }); $("#pv-L").value = pv.layer || 0; }
