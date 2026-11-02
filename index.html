@@ -2511,7 +2511,8 @@ function spaceGroupBlock() {
     if (w) {
       const fp = DB.freeParams(w[3]);
       const pos = DB.wyckoffOrbit(sg, w[3], wy.free);
-      const clash = pos.filter(p => S.sites.some(s => s.frac.every((v, i) => { const d = Math.abs((((+v - p[i]) % 1) + 1) % 1); return Math.min(d, 1 - d) < 1e-4; })));
+      // positions taken by the set just added are not reported until the user tries to add it again
+      const clash = pos.filter(p => S.sites.some(s => (wy.repeat || !wy.lastSet || s.set !== wy.lastSet) && s.frac.every((v, i) => { const d = Math.abs((((+v - p[i]) % 1) + 1) % 1); return Math.min(d, 1 - d) < 1e-4; })));
       const siteOpts = S.sites.map((s, i) => `<option value="${i}" ${+wy.copy === i ? "selected" : ""}>${esc(s.label)}</option>`).join("");
       const prefix = wy.prefix || defaultPrefix(w);
       form = `<div class="site"><div class="fields"><strong>${w[1]}${esc(w[0])} (${esc(w[3])})</strong>
@@ -2523,7 +2524,7 @@ function spaceGroupBlock() {
           <button type="button" class="btn primary small" data-a="wy-add">Add ${pos.length} site${pos.length === 1 ? "" : "s"}</button></div>
         <p class="hint num">${pos.slice(0, 12).map(p => "(" + p.map(v => fmt(v, 4)).join(", ") + ")").join("  ")}${pos.length > 12 ? `  … ${pos.length - 12} more` : ""}</p>
         ${pos.length !== w[1] ? `<div class="msg warn">These parameter values give ${pos.length} positions instead of ${w[1]}: they put the site on a more special position.</div>` : ""}
-        ${clash.length ? `<div class="msg warn">${clash.length} of these positions already hold a site; they will be skipped.</div>` : ""}</div>`;
+        ${clash.length ? `<div class="msg warn">${clash.length === pos.length ? `All ${pos.length} positions already hold a site, so nothing will be added.` : `${clash.length} of these positions already hold a site; they will be skipped.`}</div>` : ""}</div>`;
     }
     body = `<div class="fields"><span class="chip">${sys}</span><span class="hint">lattice ${esc(sg.l)}, ${setting}, ${sg.g.length} symmetry operations in the cell</span>
         ${fits ? "" : `<span class="chip warn">cell does not match</span><button type="button" class="btn small" data-a="sg-fit">Make the cell ${sys}</button>`}</div>
@@ -2930,7 +2931,7 @@ const ACT = {
     const box = $("#matbox"); box.hidden = false;
     box.textContent = `Orientation #${+el.dataset.v + 1}, Cartesian rotation matrix (applied to the molecule's coordinates):\n` + R.map(r => r.map(x => (x >= 0 ? " " : "") + x.toFixed(6)).join("  ")).join("\n") + `\ndet = ${DB.det(R).toFixed(6)}`;
   },
-  "wy-pick": el => { wy.letter = el.dataset.v; wy.prefix = ""; renderSection(); },
+  "wy-pick": el => { wy.letter = el.dataset.v; wy.prefix = ""; wy.lastSet = null; wy.repeat = false; renderSection(); },
   "sg-fit": () => { S.cell = DB.fitCell(+S.spacegroup.n, S.cell); commit(); toast("Cell adjusted to the crystal system"); },
   "wy-add": () => {
     const sg = SG.find(g => g.n === +S.spacegroup.n), w = sg && sg.w.find(q => q[0] === wy.letter); if (!w) return;
@@ -2952,6 +2953,8 @@ const ACT = {
         occupants: src ? JSON.parse(JSON.stringify(src.occupants)) : [{ type: "atom", species: el, p: 1, b: "" }] });
       added++;
     });
+    if (!added) { wy.repeat = true; renderSection(); toast("These positions already hold sites; nothing was added"); return; }
+    wy.lastSet = setId; wy.repeat = false;
     commit(); toast(`${added} site${added === 1 ? "" : "s"} added from ${label}`);
   },
   "sym-clear": el => { delete S.sites[+el.dataset.v].sym; commit(); toast("This site now uses the library orientations unchanged"); },
@@ -3039,8 +3042,9 @@ function toast(m) { let el = $("#toast"); el.textContent = m; el.hidden = false;
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "file-in") { importFile(el.files[0]); el.value = ""; return; }
-  if (el.id === "sg-sel") { S.spacegroup = { n: +el.value || 0 }; wy.letter = null; save(); renderSection(); return; }
+  if (el.id === "sg-sel") { S.spacegroup = { n: +el.value || 0 }; wy.letter = null; wy.lastSet = null; wy.repeat = false; save(); renderSection(); return; }
   if (/^wy-/.test(el.id)) {
+    if (/^wy-[xyz]$/.test(el.id)) { wy.lastSet = null; wy.repeat = false; }
     if (/^wy-[xyz]$/.test(el.id)) wy.free[el.id.slice(3)] = +el.value || 0;
     else if (el.id === "wy-prefix") wy.prefix = el.value;
     else if (el.id === "wy-occ") wy.occ = el.value;
