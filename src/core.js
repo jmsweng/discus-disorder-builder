@@ -291,44 +291,10 @@ function realize(state, opts = {}) {
     }
     return arr;
   });
-  // correlated occupancies (same model as the Python script; separate random stream)
-  const corr = state.disorder.correlations;
-  const report = [];
-  if (corr && corr.enabled) {
-    const inter = corr.interactions.filter(it => +it.J !== 0);
-    const byGroup = corr.match === "group";
-    const ids = {};
-    const key = classes.map(cl => Int32Array.from(cl.map(c => { const k = byGroup && c.group ? c.group : c.key; if (!(k in ids)) ids[k] = Object.keys(ids).length; return ids[k]; })));
-    const nb = state.sites.map(() => []);
-    inter.forEach(it => { nb[+it.site_a].push([+it.site_b, it.t.map(Number), +it.J]); nb[+it.site_b].push([+it.site_a, it.t.map(x => -x), +it.J]); });
-    const wrap = (v, m) => ((v % m) + m) % m;
-    const cellOf = c => [c % n[0], Math.floor(c / n[0]) % n[1], Math.floor(c / (n[0] * n[1]))];
-    const E = (s, c, cls) => {
-      const [x, y, z] = cellOf(c); let e = 0; const k = key[s][cls];
-      for (const [o, t, J] of nb[s]) if (key[o][choice[o][idx(wrap(x + t[0], n[0]), wrap(y + t[1], n[1]), wrap(z + t[2], n[2]))]] === k) e += J;
-      return e;
-    };
-    const measure = () => inter.map(it => {
-      const a = +it.site_a, b = +it.site_b, t = it.t.map(Number); let same = 0;
-      for (let c = 0; c < ncell; c++) { const [x, y, z] = cellOf(c); if (key[a][choice[a][c]] === key[b][choice[b][idx(wrap(x + t[0], n[0]), wrap(y + t[1], n[1]), wrap(z + t[2], n[2]))]]) same++; }
-      return same / ncell;
-    });
-    const before = measure(), kT = +corr.kT || 1;
-    const sweeps = Math.min(+corr.sweeps || 0, opts.maxSweeps || 1e9);
-    for (let sw = 0; sw < sweeps; sw++) for (let s = 0; s < classes.length; s++) {
-      if (!nb[s].length || classes[s].length < 2) continue;
-      for (let it = 0; it < ncell; it++) {
-        const c1 = rnd.int(ncell), c2 = rnd.int(ncell), x1 = choice[s][c1], x2 = choice[s][c2];
-        if (key[s][x1] === key[s][x2]) continue;
-        const e0 = E(s, c1, x1) + E(s, c2, x2);
-        choice[s][c1] = x2; choice[s][c2] = x1;
-        const dE = E(s, c1, x2) + E(s, c2, x1) - e0;
-        if (!(dE <= 0 || rnd() < Math.exp(-dE / kT))) { choice[s][c1] = x1; choice[s][c2] = x2; }
-      }
-    }
-    const after = measure();
-    inter.forEach((it, i) => report.push({ it, before: before[i], after: after[i] }));
-  }
+  // ordering Monte Carlo: neighbour energies J (same / different occupant) and contact penalties
+  // (same model as the Python script; separate random stream)
+  const ord = orderingMC(state, A, classes, choice, n, rnd, opts);
+  const report = ord.report, contactReport = ord.contactReport;
   // place atoms
   const rig = state.disorder.molecule_rigid || {}, tS = +rig.translation_sigma || 0, lS = +rig.libration_sigma_deg || 0;
   const disp = state.disorder.atomic_displacements || {};
@@ -353,7 +319,146 @@ function realize(state, opts = {}) {
     });
   }
   for (const a of atoms) { const s = a.sigma != null ? a.sigma : (+disp[a.el] || 0); if (s > 0) a.p = add(a.p, [rnd.normal() * s, rnd.normal() * s, rnd.normal() * s]); }
-  return { atoms, n, A, report, classes, nMolecules: molCount };
+  return { atoms, n, A, report, contactReport, classes, nMolecules: molCount };
+}
+
+// ---------------------------------------------------------------------------------- forbidden contacts
+const PENALTY = { forbidden: 100, strong: 10, mild: 2 };
+// van der Waals radii (Å, Bondi 1964 / Alvarez 2013 for a few) used to suggest contact rules
+const VDW = { H: 1.20, C: 1.70, N: 1.55, O: 1.52, F: 1.47, P: 1.80, S: 1.80, Cl: 1.75, Br: 1.85, I: 1.98, Se: 1.90, Si: 2.10,
+  B: 1.92, As: 1.85, Te: 2.06, Xe: 2.16, Kr: 2.02, Ar: 1.88, Ne: 1.54, He: 1.40 };
+function ruleMatch(r, e1, e2) {
+  const m = (x, y) => x === "any" || x === y;
+  return (m(r.a, e1) && m(r.b, e2)) || (m(r.a, e2) && m(r.b, e1));
+}
+// For every pair of neighbouring site positions, a table of penalties (and contact counts) for each pair of
+// occupants. Atoms are placed at their ideal positions (no translation / libration / displacement noise).
+function contactModel(state, A, classes) {
+  const con = state.disorder.contacts || {};
+  const rules = (con.rules || []).filter(r => +r.dmin > 0 && +r.penalty > 0).map(r => ({ a: r.a, b: r.b, d2: (+r.dmin) ** 2, pen: +r.penalty }));
+  const sites = state.sites;
+  if (!rules.length) return { entries: sites.map(() => []), pairs: [], rules };
+  const otab = {};
+  const shapes = classes.map(cl => cl.map(c => {
+    if (c.type === "atom") return { el: [elementOf(c.species) || c.species], p: [[0, 0, 0]] };
+    if (c.type === "molecule") { const loc = moleculeLocal(c.mol); return { el: loc.species, p: loc.xyz.map(q => mv(c.R, q)) }; }
+    return { el: [], p: [] };
+  }));
+  void otab;
+  const R = shapes.map(sh => Math.max(0, ...sh.flatMap(x => x.p.map(norm))));
+  const dmax = Math.sqrt(Math.max(...rules.map(r => r.d2)));
+  const Ainv = inv(A), recip = [0, 1, 2].map(k => Math.hypot(Ainv[0][k], Ainv[1][k], Ainv[2][k]));
+  const entries = sites.map(() => []), pairs = [];
+  sites.forEach((s1, i) => sites.forEach((s2, j) => {
+    const cut = R[i] + R[j] + dmax, m = recip.map(r => Math.ceil(cut * r) + 1);
+    for (let tx = -m[0]; tx <= m[0]; tx++) for (let ty = -m[1]; ty <= m[1]; ty++) for (let tz = -m[2]; tz <= m[2]; tz++) {
+      if (i === j && !tx && !ty && !tz) continue;
+      const off = frac2cart(A, [tx + +s2.frac[0] - +s1.frac[0], ty + +s2.frac[1] - +s1.frac[1], tz + +s2.frac[2] - +s1.frac[2]]);
+      const dist = norm(off);
+      if (dist > cut + 1e-9) continue;
+      const K = classes[i].length, L = classes[j].length;
+      const table = new Float64Array(K * L), count = new Int32Array(K * L);
+      let any = false;
+      for (let k = 0; k < K; k++) for (let l = 0; l < L; l++) {
+        const a = shapes[i][k], b = shapes[j][l];
+        let e = 0, c = 0;
+        for (let u = 0; u < a.p.length; u++) for (let v = 0; v < b.p.length; v++) {
+          const dx = off[0] + b.p[v][0] - a.p[u][0], dy = off[1] + b.p[v][1] - a.p[u][1], dz = off[2] + b.p[v][2] - a.p[u][2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          let hit = false;
+          for (const r of rules) if (d2 < r.d2 && ruleMatch(r, a.el[u], b.el[v])) { e += r.pen; hit = true; }
+          if (hit) c++;
+        }
+        table[k * L + l] = e; count[k * L + l] = c; if (e) any = true;
+      }
+      if (any) { entries[i].push({ o: j, t: [tx, ty, tz], table, count, L }); if (i <= j) pairs.push({ i, j, t: [tx, ty, tz], dist, table, count, K, L }); }
+    }
+  }));
+  return { entries, pairs, rules };
+}
+
+function orderingMC(state, A, classes, choice, n, rnd, opts) {
+  const corr = state.disorder.correlations || {}, con = state.disorder.contacts || {};
+  const ncell = n[0] * n[1] * n[2];
+  const potts = corr.enabled ? corr.interactions.filter(it => +it.J !== 0) : [];
+  const cm = con.enabled ? contactModel(state, A, classes) : { entries: state.sites.map(() => []), pairs: [] };
+  const useContacts = cm.pairs.length > 0;
+  const report = [];
+  if (!potts.length && !useContacts) return { report, contactReport: null };
+  const byGroup = corr.match === "group";
+  const ids = {};
+  const key = classes.map(cl => Int32Array.from(cl.map(c => { const k = byGroup && c.group ? c.group : c.key; if (!(k in ids)) ids[k] = Object.keys(ids).length; return ids[k]; })));
+  const change = con.change || (con.reorient === false ? "none" : "orientation");
+  // occupants a run may turn into each other: orientations of one group, or every molecule of the site
+  const fam = classes.map(cl => cl.map(c => (c.type === "molecule" ? (change === "group" ? "mol" : "mol:" + c.group) : c.key)));
+  const wrap = (v, m) => ((v % m) + m) % m;
+  const shiftMap = t => { const mp = new Int32Array(ncell);
+    for (let z = 0; z < n[2]; z++) for (let y = 0; y < n[1]; y++) for (let x = 0; x < n[0]; x++)
+      mp[x + n[0] * (y + n[1] * z)] = wrap(x + t[0], n[0]) + n[0] * (wrap(y + t[1], n[1]) + n[1] * wrap(z + t[2], n[2]));
+    return mp; };
+  const maps = {};
+  const mapOf = t => (maps[t.join(",")] = maps[t.join(",")] || shiftMap(t));
+  const nb = state.sites.map(() => []);
+  potts.forEach(it => {
+    const a = +it.site_a, b = +it.site_b, t = it.t.map(Number), J = +it.J;
+    nb[a].push({ o: b, map: mapOf(t), J });
+    nb[b].push({ o: a, map: mapOf(t.map(x => -x)), J });
+  });
+  cm.entries.forEach((list, i) => list.forEach(e => nb[i].push({ o: e.o, map: mapOf(e.t), table: e.table, count: e.count, L: e.L })));
+  const term = (s, e, k, k2) => (e.table ? e.table[k * e.L + k2] : (key[s][k] === key[e.o][k2] ? e.J : 0));
+  const local = (s, c, k, excl) => {
+    let E = 0;
+    for (const e of nb[s]) { const c2 = e.map[c]; if (e.o === s && c2 === excl) continue; E += term(s, e, k, choice[e.o][c2]); }
+    return E;
+  };
+  const bond = (s, c1, k1, c2, k2) => { let E = 0; for (const e of nb[s]) if (e.o === s && e.map[c1] === c2) E += term(s, e, k1, k2); return E; };
+  const measure = () => potts.map(it => {
+    const a = +it.site_a, b = +it.site_b, mp = mapOf(it.t.map(Number)); let same = 0;
+    for (let c = 0; c < ncell; c++) if (key[a][choice[a][c]] === key[b][choice[b][mp[c]]]) same++;
+    return same / ncell;
+  });
+  const contacts = () => { let tot = 0;
+    cm.entries.forEach((list, i) => list.forEach(e => { const mp = mapOf(e.t); for (let c = 0; c < ncell; c++) tot += e.count[choice[i][c] * e.L + choice[e.o][mp[c]]]; }));
+    return tot / 2; };
+  const before = measure(), cBefore = useContacts ? contacts() : 0;
+  const kT = +corr.kT || 1, sweeps = Math.min(+corr.sweeps || 0, opts.maxSweeps || 1e9);
+  const reorient = useContacts && change !== "none", anneal = useContacts && con.anneal !== false;
+  const famIdx = classes.map((cl, s) => { const g = {}; cl.forEach((c, k) => { (g[fam[s][k]] = g[fam[s][k]] || []).push(k); }); return cl.map((c, k) => g[fam[s][k]]); });
+  for (let sw = 0; sw < sweeps; sw++) {
+    const T = anneal ? kT * Math.pow(10, Math.max(0, 1 - sw / Math.max(1, 0.6 * sweeps))) : kT;
+    for (let s = 0; s < classes.length; s++) {
+      if (!nb[s].length || classes[s].length < 2) continue;
+      const cls = classes[s];
+      for (let it = 0; it < ncell; it++) {
+        if (reorient) { // pick a new orientation of the same molecule group, proposed with the group's weights
+          const c = rnd.int(ncell), x = choice[s][c], opts2 = famIdx[s][x];
+          if (opts2.length > 1) {
+            let u = rnd() * opts2.reduce((a, k) => a + cls[k].p, 0), y = opts2[0];
+            for (const k of opts2) { u -= cls[k].p; if (u <= 0) { y = k; break; } }
+            if (y !== x) {
+              const dE = local(s, c, y, -1) - local(s, c, x, -1);
+              if (dE <= 0 || rnd() < Math.exp(-dE / T)) choice[s][c] = y;
+            }
+          }
+        }
+        const c1 = rnd.int(ncell), c2 = rnd.int(ncell), x1 = choice[s][c1], x2 = choice[s][c2];
+        if (c1 === c2 || fam[s][x1] === fam[s][x2] && (reorient || key[s][x1] === key[s][x2])) continue;
+        if (!useContacts && key[s][x1] === key[s][x2]) continue;
+        const e0 = local(s, c1, x1, c2) + local(s, c2, x2, c1) + bond(s, c1, x1, c2, x2);
+        choice[s][c1] = x2; choice[s][c2] = x1;
+        const dE = local(s, c1, x2, c2) + local(s, c2, x1, c1) + bond(s, c1, x2, c2, x1) - e0;
+        if (!(dE <= 0 || rnd() < Math.exp(-dE / T))) { choice[s][c1] = x1; choice[s][c2] = x2; }
+      }
+    }
+  }
+  const after = measure();
+  potts.forEach((it, i) => report.push({ it, before: before[i], after: after[i] }));
+  let contactReport = null;
+  if (useContacts) {
+    const pop = classes.map((cl, s) => { const h = new Array(cl.length).fill(0); for (let c = 0; c < ncell; c++) h[choice[s][c]]++; return h.map(x => x / ncell); });
+    contactReport = { before: cBefore, after: contacts(), pairs: cm.pairs, populations: pop, cells: ncell };
+  }
+  return { report, contactReport };
 }
 
 // ---------------------------------------------------------------------------------- diffuse preview (f = Z)
@@ -436,6 +541,16 @@ function validate(state) {
       ["sigma", "trans", "lib"].forEach(k => { if (o[k] !== "" && o[k] != null && !(+o[k] >= 0)) errs.push(`Site ${s.label}: disorder values must be ≥ 0.`); });
     });
   });
+  const con = state.disorder.contacts || {};
+  if (con.enabled) {
+    if (!(con.rules || []).length) errs.push("Forbidden contacts: add at least one rule or switch them off.");
+    (con.rules || []).forEach((r, i) => {
+      if (!(+r.dmin > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the minimum distance must be > 0.`);
+      if (!(+r.penalty > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the penalty must be > 0.`);
+      [r.a, r.b].forEach(e => { if (e !== "any" && !Z[e]) errs.push(`Forbidden contacts, rule ${i + 1}: “${e}” is not an element.`); });
+    });
+    if (!(+(state.disorder.correlations || {}).sweeps > 0)) errs.push("Forbidden contacts need at least one Monte Carlo sweep (Disorder → sweeps).");
+  }
   const hasMol = state.sites.some(s => s.occupants.some(o => o.type === "molecule" && +o.p > 0));
   if (state.mmc.enabled && hasMol) errs.push("DISCUS Monte Carlo works on atom-only models; switch it off or remove molecules.");
   if (state.mmc.enabled) {
@@ -503,6 +618,9 @@ function buildConfig(state) {
       atomic_displacements: Object.fromEntries(Object.entries(state.disorder.atomic_displacements).filter(([, v]) => +v > 0).map(([k, v]) => [k, +v])),
       molecule_rigid: { translation_sigma: +state.disorder.molecule_rigid.translation_sigma || 0, libration_sigma_deg: +state.disorder.molecule_rigid.libration_sigma_deg || 0 },
       clash_threshold: +state.disorder.clash_threshold || 0.8,
+      contacts: { enabled: !!(state.disorder.contacts || {}).enabled, change: (state.disorder.contacts || {}).change || "orientation",
+        anneal: (state.disorder.contacts || {}).anneal !== false,
+        rules: ((state.disorder.contacts || {}).rules || []).map(r => ({ a: r.a, b: r.b, dmin: +r.dmin, penalty: +r.penalty })) },
       correlations: { ...state.disorder.correlations, sweeps: +state.disorder.correlations.sweeps, kT: +state.disorder.correlations.kT,
         interactions: state.disorder.correlations.interactions.map(i => ({ site_a: +i.site_a, site_b: +i.site_b, t: i.t.map(Number), J: +i.J })) },
     },
@@ -520,6 +638,6 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, realize, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, realize, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);

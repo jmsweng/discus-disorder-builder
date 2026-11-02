@@ -53,7 +53,7 @@ function renderStatus() {
 // ------------------------------------------------------------------------------------------ sections
 const SECTIONS = [
   ["cell", "Cell"], ["molecules", "Molecules"], ["orientations", "Orientations"], ["sites", "Sites"],
-  ["disorder", "Disorder"], ["mc", "Monte Carlo"], ["calc", "Calculations"], ["script", "Script"],
+  ["disorder", "Disorder"], ["contacts", "Forbidden contacts"], ["mc", "Monte Carlo"], ["calc", "Calculations"], ["script", "Script"],
 ];
 function renderRail() {
   $("#rail").innerHTML = SECTIONS.map(([k, t], i) => `<button type="button" data-sec="${k}" aria-current="${k === section}">
@@ -282,6 +282,7 @@ RENDER.disorder = () => {
   <div class="block"><h3>Correlated occupants ${chk("disorder.correlations.enabled", "on")}</h3>
     <p class="hint">A swap Monte Carlo that keeps the composition. Each listed pair of neighbours adds an energy J (in kT) when both hold the same occupant: J &lt; 0 makes like neighbours (domains), J &gt; 0 alternation. It works for atoms, vacancies and molecule orientations alike and runs in the generated script before DISCUS sees the crystal.</p>
     <div class="fields">${field("Sweeps", num("disorder.correlations.sweeps", 'step="1" class="w-s"'))}${field("kT", num("disorder.correlations.kT", 'class="w-s"'))}
+      <span class="hint">Sweeps and kT are shared with Forbidden contacts.</span>
       ${field("“Same occupant” means", sel("disorder.correlations.match", [["orientation", "same atom / same orientation"], ["group", "same atom / same molecule group"]]))}</div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Neighbour site</th><th>Cell offset t</th><th>J (kT)</th><th>P(same) preview</th><th></th></tr></thead><tbody>${inter}</tbody></table></div>
     <div class="fields"><button type="button" class="btn small" data-a="int-add">Add pair</button>
@@ -319,6 +320,66 @@ function perOccupant() {
     <p class="hint">Different amounts of disorder for each atom or molecule in the cell. An empty field uses the default shown in grey (“default” for a molecule's atoms means each element's own value above); a value replaces it for that occupant only (0 switches it off).</p>
     ${rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Occupant</th><th>p</th><th>Atomic σ (Å)</th><th>Translation σ (Å)</th><th>Libration σ (°)</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>` : '<p class="hint">No occupants yet.</p>'}</div>`;
 }
+
+// ---- Forbidden contacts
+const STRENGTH = [[100, "forbidden (100 kT)"], [10, "strong (10 kT)"], [2, "mild (2 kT)"]];
+RENDER.contacts = () => {
+  const con = S.disorder.contacts, corr = S.disorder.correlations;
+  const sp = [...new Set(allSpecies().map(e => DB.elementOf(e) || e))];
+  const elOpts = [["any", "any atom"], ...sp.map(e => [e, e])];
+  const rules = con.rules.map((r, k) => {
+    const p = `disorder.contacts.rules.${k}`, known = STRENGTH.some(([v]) => v === +r.penalty);
+    const opts = elOpts.some(([v]) => v === r.a) ? elOpts : [[r.a, r.a], ...elOpts];
+    const optsB = elOpts.some(([v]) => v === r.b) ? elOpts : [[r.b, r.b], ...elOpts];
+    return `<tr><td>${sel(`${p}.a`, opts)}</td><td>${sel(`${p}.b`, optsB)}</td><td>${num(`${p}.dmin`, 'min="0" class="w-s"')}</td>
+      <td><select data-b="${p}.penalty" data-t="penalty">${STRENGTH.map(([v, l]) => `<option value="${v}" ${+r.penalty === v ? "selected" : ""}>${l}</option>`).join("")}
+        <option value="custom" ${known ? "" : "selected"}>custom…</option></select>
+        ${known ? "" : num(`${p}.penalty`, 'min="0" class="w-s"') + ' <span class="hint">kT</span>'}</td>
+      <td><button type="button" class="btn ghost" data-a="rule-del" data-v="${k}" aria-label="Remove rule">✕</button></td></tr>`;
+  }).join("");
+  const cr = lastReal && lastReal.contactReport;
+  let check = '<p class="hint">Switch the rules on to see what they do in the preview crystal.</p>';
+  if (con.enabled && !con.rules.length) check = '<p class="hint">Add a rule first.</p>';
+  else if (con.enabled && !cr) check = '<p class="hint">No neighbouring occupants can come that close, so the rules never apply. Check the distances.</p>';
+  else if (cr) {
+    const nn = lastReal.n.join("×"), ok = cr.after === 0;
+    const pairs = cr.pairs.slice().sort((x, y) => x.dist - y.dist);
+    const shown = pairs.slice(0, 12).map(q => {
+      let bad = 0; for (let i = 0; i < q.table.length; i++) if (q.table[i] > 0) bad++;
+      return `<tr><td>${esc(S.sites[q.i].label)} → ${esc(S.sites[q.j].label)}</td><td class="num">[${q.t.join(" ")}]</td><td class="num">${fmt(q.dist, 3)} Å</td>
+        <td class="num">${bad} of ${q.table.length}</td><td><div class="probbar" style="width:120px"><span style="width:${100 * bad / q.table.length}%;background:var(--err)"></span></div></td></tr>`;
+    }).join("");
+    const pop = S.sites.map((s, si) => {
+      const cl = lastReal.classes[si]; if (cl.length < 2) return "";
+      const groups = {};
+      cl.forEach((c, k) => { const g = c.type === "molecule" ? (S.orientations.find(o => o.id === c.group) || {}).name || c.group : c.type === "atom" ? c.species : "vacancy";
+        groups[g] = groups[g] || { prior: 0, now: 0, n: 0, used: 0 }; groups[g].prior += c.p; groups[g].now += cr.populations[si][k]; groups[g].n++; if (cr.populations[si][k] > 0) groups[g].used++; });
+      return Object.entries(groups).map(([g, v]) => `<tr><td>${esc(s.label)}</td><td>${esc(g)}</td><td class="num">${fmt(v.prior, 3)}</td><td class="num">${fmt(v.now, 3)}</td><td class="num">${v.used} of ${v.n}</td></tr>`).join("");
+    }).join("");
+    check = `<div class="fields"><span class="chip ${ok ? "ok" : "warn"}"><span class="dot" style="background:currentColor"></span>${cr.before} → ${cr.after} close contacts</span>
+        <span class="hint">in a random ${nn}-cell preview crystal, before and after ${Math.min(+corr.sweeps, 60)} sweeps${+corr.sweeps > 60 ? " (the script runs all " + corr.sweeps + ")" : ""}.</span></div>
+      ${ok ? "" : '<p class="hint">Contacts remain. Try more sweeps, keep annealing on, or check that an arrangement without them exists (the closest neighbour pairs below show how many occupant combinations each rule excludes).</p>'}
+      <h4 class="sub">Neighbour positions the rules act on</h4>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Sites</th><th>Cell offset</th><th>Centre distance</th><th>Excluded pairs</th><th></th></tr></thead><tbody>${shown}</tbody></table></div>
+      ${pairs.length > 12 ? `<p class="hint">…and ${pairs.length - 12} more neighbour positions.</p>` : ""}
+      <h4 class="sub">How often each occupant is chosen</h4>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Occupant</th><th>Set in Sites</th><th>After the run</th><th>Orientations used</th></tr></thead><tbody>${pop}</tbody></table></div>`;
+  }
+  return head("Forbidden contacts", "Rules that keep atoms of neighbouring molecules or sites apart, for example no Br···Br closer than 3.8 Å. A Monte Carlo then picks the occupants and orientations so that these contacts are avoided, in the generated script and in the preview.") + `
+  <div class="block"><h3>Rules ${chk("disorder.contacts.enabled", "on")}</h3>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Atom</th><th>Atom</th><th>Closer than (Å)</th><th>Strength</th><th></th></tr></thead><tbody>${rules || '<tr><td colspan="5" class="hint">No rules yet.</td></tr>'}</tbody></table></div>
+    <div class="fields"><button type="button" class="btn small" data-a="rule-add">Add rule</button>
+      <button type="button" class="btn small" data-a="rule-vdw">Suggest from van der Waals radii</button>
+      ${field("Scale the sums by", `<input type="number" id="vdw-scale" step="0.05" min="0.5" max="1.2" value="${esc(S.disorder.contacts.vdw_scale || 1)}" class="w-s">`)}</div>
+    <p class="hint">A contact is two atoms of different molecules or sites closer than the distance. Each one costs the penalty in kT: “forbidden” makes it practically impossible, “strong” and “mild” only make it rare. Contacts are checked at the ideal positions, before the rigid-body and atomic displacements of the Disorder step.</p></div>
+  <div class="block"><h3>Monte Carlo run</h3>
+    <div class="fields">${field("Sweeps", num("disorder.correlations.sweeps", 'step="1" class="w-s"'))}${field("kT", num("disorder.correlations.kT", 'class="w-s"'))}
+      <span class="hint">shared with Correlated occupants</span></div>
+    <div class="fields">${field("The run may change", sel("disorder.contacts.change", [["orientation", "orientations within each group"], ["group", "orientations and molecule groups"], ["none", "nothing: swap occupants only"]]))}
+      ${chk("disorder.contacts.anneal", "Anneal (start at 10 kT and cool)")}</div>
+    <p class="hint">“Orientations within each group” keeps the number of molecules of each group from the Sites step and lets each molecule pick another orientation of its group. “Orientations and molecule groups” also lets the group shares move, starting from the probabilities in Sites. “Swap only” keeps every occupant's count exactly and only exchanges occupants between cells. In all three the counts of atoms and vacancies stay fixed.</p></div>
+  <div class="block"><h3>Check</h3>${check}</div>`;
+};
 
 // ---- 6 Monte Carlo (DISCUS mmc)
 RENDER.mc = () => {
@@ -453,6 +514,12 @@ const TIPS_B = [
   [/^disorder\.molecule_rigid\.translation_sigma$/, "Default Gaussian shift of each whole molecule (Å, per direction)."],
   [/^disorder\.molecule_rigid\.libration_sigma_deg$/, "Default Gaussian rotation of each molecule about a random axis (degrees)."],
   [/^disorder\.atomic_displacements\./, "Default Gaussian displacement of every atom of this element (Å, per direction)."],
+  [/^disorder\.contacts\.enabled$/, "Use the contact rules in the Monte Carlo that places occupants and orientations."],
+  [/^disorder\.contacts\.rules\.\d+\.(a|b)$/, "Element of one atom of the contact; 'any atom' matches every element."],
+  [/^disorder\.contacts\.rules\.\d+\.dmin$/, "Two atoms of different molecules or sites closer than this (Å) count as a contact."],
+  [/^disorder\.contacts\.rules\.\d+\.penalty$/, "Energy cost per contact in kT. Forbidden = 100 kT (never happens in practice), strong = 10, mild = 2."],
+  [/^disorder\.contacts\.change$/, "What the Monte Carlo may change to avoid contacts: orientations within a group, orientations and the molecule group, or nothing (swaps only)."],
+  [/^disorder\.contacts\.anneal$/, "Start at 10 × kT and cool to kT over the first 60 % of the sweeps; helps the run escape poor arrangements."],
   [/^disorder\.clash_threshold$/, "The script warns about atoms of different molecules or sites closer than this (Å)."],
   [/^mmc\.enabled$/, "Run DISCUS mmc on the built crystal before the scattering calculation (atom-only models)."],
   [/^mmc\.moves_per_atom$/, "Trial moves per atom (× atoms = DISCUS set cyc)."],
@@ -511,7 +578,8 @@ const TIPS_A = {
   "grp-dup": "Copy this group.", "grp-del": "Delete this group (only when no site uses it).", "op-add": "Append this operation.",
   "mat-show": "Show the rotation matrix of this orientation.", "site-add": "Add a site to the unit cell.", "site-del": "Remove this site.",
   "occ-add": "Add an occupant with probability 0; then set its probability.", "occ-del": "Remove this occupant.",
-  "occ-norm": "Scale the probabilities so they add up to 1.", "int-add": "Add a neighbour pair with an energy J.",
+  "occ-norm": "Scale the probabilities so they add up to 1.", "int-add": "Add a neighbour pair with an energy J.", "rule-add": "Add a contact rule.", "rule-del": "Remove this rule.",
+  "rule-vdw": "Add a rule for every element pair that has a tabulated radius: minimum distance = sum of the van der Waals radii × the scale.",
   "int-axes": "Add pairs along +a, +b and +c (the reverse directions are included automatically).", "int-del": "Remove this pair.",
   "nb-add": "Add a DISCUS neighbourhood.", "nb-del": "Remove this neighbourhood and its targets.", "vec-add": "Add a neighbour vector.",
   "vec-axes": "Add vectors to the same site one cell along a, b and c.", "vec-del": "Remove this vector.", "tg-add": "Add an mmc target.",
@@ -525,6 +593,7 @@ const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
   "pv-n": "Size of each random preview crystal (cells per axis, at most the supercell).",
   "pv-d": "Number of independent random crystals averaged; more crystals, less speckle.",
+  "vdw-scale": "Multiply the van der Waals sums by this (e.g. 0.9 to allow slightly closer contacts).",
   "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
   "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
@@ -596,6 +665,21 @@ const ACT = {
   },
   "occ-del": el => { const [si, oi] = el.dataset.v.split(".").map(Number); S.sites[si].occupants.splice(oi, 1); commit(); },
   "occ-norm": el => { const s = S.sites[+el.dataset.v]; const t = s.occupants.reduce((a, o) => a + (+o.p || 0), 0); if (t > 0) s.occupants.forEach(o => { o.p = +((+o.p || 0) / t).toFixed(6); }); commit(); },
+  "rule-add": () => { const sp = allSpecies().map(e => DB.elementOf(e) || e); const e = sp.includes("Br") ? "Br" : sp[sp.length - 1] || "any";
+    S.disorder.contacts.rules.push({ a: e, b: e, dmin: +((DB.VDW[e] || 1.7) * 2).toFixed(2), penalty: 100 }); S.disorder.contacts.enabled = true; commit(); },
+  "rule-del": el => { S.disorder.contacts.rules.splice(+el.dataset.v, 1); commit(); },
+  "rule-vdw": () => {
+    const f = +($("#vdw-scale") || {}).value || 1; S.disorder.contacts.vdw_scale = f;
+    const sp = [...new Set(allSpecies().map(e => DB.elementOf(e) || e))].filter(e => DB.VDW[e]);
+    const missing = [...new Set(allSpecies().map(e => DB.elementOf(e) || e))].filter(e => !DB.VDW[e]);
+    let added = 0;
+    sp.forEach((a, i) => sp.slice(i).forEach(b => {
+      const d = +((DB.VDW[a] + DB.VDW[b]) * f).toFixed(2), r = S.disorder.contacts.rules.find(x => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+      if (r) r.dmin = d; else { S.disorder.contacts.rules.push({ a, b, dmin: d, penalty: 100 }); added++; }
+    }));
+    S.disorder.contacts.enabled = true; commit();
+    toast(`${added} rule${added === 1 ? "" : "s"} added${missing.length ? `; no radius for ${missing.join(", ")}` : ""}`);
+  },
   "int-add": () => { S.disorder.correlations.interactions.push({ site_a: 0, site_b: 0, t: [1, 0, 0], J: -0.5 }); S.disorder.correlations.enabled = true; commit(); },
   "int-axes": () => { [[1, 0, 0], [0, 1, 0], [0, 0, 1]].forEach(t => S.disorder.correlations.interactions.push({ site_a: 0, site_b: 0, t, J: -0.5 })); S.disorder.correlations.enabled = true; commit(); },
   "int-del": el => { S.disorder.correlations.interactions.splice(+el.dataset.v, 1); commit(); },
@@ -652,6 +736,7 @@ document.addEventListener("change", e => {
   if (t === "num") { v = el.value === "" ? 0 : +el.value; if (!isFinite(v)) v = 0; }
   else if (t === "numornull") v = el.value === "" ? "" : +el.value;
   else if (t === "bool") v = el.checked;
+  else if (t === "penalty") v = el.value === "custom" ? 5 : +el.value;
   if (path.endsWith(".type") && path.includes(".occupants.")) {
     const o = getPath(path.replace(/\.type$/, ""));
     if (v === "atom" && !o.species) o.species = "C";
@@ -696,7 +781,7 @@ function updatePreview() {
   try { lastReal = DB.realize(S, { n: previewN(), seed: (+S.seed || 1) + 7919 * previewSeed, maxSweeps: 60 }); }
   catch (e) { $("#xstats").textContent = e.message; return; }
   drawCrystal();
-  if (section === "disorder") { const y = window.scrollY; renderSection(); window.scrollTo(0, y); }
+  if (section === "disorder" || section === "contacts") { const y = window.scrollY; renderSection(); window.scrollTo(0, y); }
 }
 const ORI = ["#0d6a80", "#d9822b", "#5f9e3a", "#9b59b6", "#c0392b", "#2c7fb8", "#c9a227", "#16a085", "#e67e22", "#7f8c8d", "#8e44ad", "#27ae60"];
 function drawCrystal() {
@@ -731,7 +816,11 @@ function drawCrystal() {
   else if (colorMode === "site") legend = S.sites.map((s, i) => `<span><span class="dot" style="background:${ORI[i % ORI.length]}"></span>${esc(s.label)}</span>`).join("");
   else {
     const otab = DB.orientationTable(S, A);
-    legend = Object.values(otab).flatMap((t, gi) => t.orientations.map((o, k2) => `<span><span class="dot" style="background:${ORI[(groups.indexOf(t.group.id) * 3 + k2) % ORI.length]}"></span>${esc(t.group.name)} #${k2 + 1}</span>`)).join("") + `<span><span class="dot" style="background:#9aa7ad"></span>atoms</span>`;
+    const tabs = Object.values(otab), total = tabs.reduce((a, t) => a + t.orientations.length, 0);
+    legend = (total <= 12
+      ? tabs.flatMap(t => t.orientations.map((o, k2) => `<span><span class="dot" style="background:${ORI[(groups.indexOf(t.group.id) * 3 + k2) % ORI.length]}"></span>${esc(t.group.name)} #${k2 + 1}</span>`))
+      : tabs.map(t => `<span>${t.orientations.slice(0, 6).map((o, k2) => `<span class="dot" style="background:${ORI[(groups.indexOf(t.group.id) * 3 + k2) % ORI.length]}"></span>`).join("")}${esc(t.group.name)} (${t.orientations.length} orientations)</span>`)
+    ).join("") + `<span><span class="dot" style="background:#9aa7ad"></span>atoms</span>`;
   }
   $("#xlegend").innerHTML = legend;
   $("#xstats").innerHTML = `${lastReal.n.join("×")} preview cells · ${(atoms.length / nc).toFixed(2)} atoms/cell · ${lastReal.nMolecules} molecules<br>` +
