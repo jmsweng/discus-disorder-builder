@@ -21,7 +21,8 @@ A static web page (live at https://jmsweng.github.io/discus-disorder-builder/) f
   molecules, Gaussian atomic displacements, and a contact check.
 - **DISCUS Monte Carlo** (atom-only models): neighbourhoods, occupational / displacement / spring / Lennard-Jones
   targets and moves, through `discuspdf.mc.MCConfig`.
-- **Calculations**: 3D diffuse scattering with Bragg subtraction (`FourierConfig`, `set aver`, LOTS), 3D-ΔPDF by the
+- **Calculations**: 3D diffuse scattering with Bragg subtraction (`FourierConfig`, `set aver`, LOTS, X-ray or neutron,
+  wavelength as a DISCUS symbol or Å), 3D-ΔPDF by the
   fractional FFT, optional total scattering and 3D-PDF (Patterson), and the 1D powder PDF of the supercell.
 - **Preview**: a rotatable view of a random draw of the crystal (coloured by orientation, element or site) and an
   in-browser direct-sum diffuse plane (f = Z, averaged over several random crystals).

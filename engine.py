@@ -677,10 +677,36 @@ def fourier_config(cfg: dict, calc3: dict, aver: float, outfile: str, seed8, lot
         lots = Lots(L.get("shape", "box"), tuple(int(x) for x in L["size"]),
                     "all" if str(L.get("count", "all")) == "all" else int(L["count"]), bool(L.get("periodic", True)))
     # an explicit 8-value seed is always written: needed for 0 < aver < 100 and random lots, harmless otherwise
-    return FourierConfig(grid, outputs=(("int", outfile),), aver_percent=aver, lots=lots,
-                         seed=Seed(tuple(seed8)),
-                         temperature="use" if cfg.get("calc", {}).get("debye_waller") else "ignore",
-                         symmetry=calc3.get("symmetry") or None)
+    # radiation / wavelength need discus-python with FourierConfig(radiation=…) (PR #62); the defaults are
+    # left out of the call so X-ray Mo Kα1 runs still work with an older discuspdf.
+    extra = {}
+    radiation = calc3.get("radiation") or "xray"
+    wavelength = fourier_wavelength(calc3.get("wavelength"))
+    if radiation != "xray":
+        extra["radiation"] = radiation
+    if wavelength != "moa1":
+        extra["wavelength"] = wavelength
+    try:
+        return FourierConfig(grid, outputs=(("int", outfile),), aver_percent=aver, lots=lots,
+                             seed=Seed(tuple(seed8)),
+                             temperature="use" if cfg.get("calc", {}).get("debye_waller") else "ignore",
+                             symmetry=calc3.get("symmetry") or None, **extra)
+    except (TypeError, ValueError) as e:
+        if "radiation" in str(e) or "only these were verified" in str(e):
+            raise SystemExit("This discuspdf has no FourierConfig(radiation=…); update discus-python "
+                             "(pip install -U \"discuspdf[data] @ git+https://github.com/jmsweng/discus-python\")") from e
+        raise
+
+
+def fourier_wavelength(w):
+    """The page's λ field: a DISCUS symbol ('moa1', 'cua1', …) or a number in Å; empty means 'moa1'."""
+    s = str(w if w is not None else "").strip()
+    if not s:
+        return "moa1"
+    try:
+        return float(s)
+    except ValueError:
+        return s.lower()
 
 
 def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True):
@@ -887,7 +913,8 @@ def main(argv=None) -> int:
     seed8 = seed8_from(rng_discus)
     f3 = calc.get("fourier", {})
     if f3.get("enabled"):
-        log("3D diffuse scattering (DISCUS fourier, Bragg subtracted) …")
+        log(f"3D diffuse scattering (DISCUS fourier, {f3.get('radiation') or 'xray'}, "
+            f"λ {fourier_wavelength(f3.get('wavelength'))}, Bragg subtracted) …")
         diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log,
                               aver=float(f3.get("aver_percent", 100.0)), name="diffuse")
         if diffuse is not None:

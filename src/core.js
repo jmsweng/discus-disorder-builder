@@ -687,6 +687,9 @@ function validate(state) {
   }
   const f3 = state.calc.fourier;
   if (f3.enabled) {
+    if (!["xray", "neutron"].includes(f3.radiation || "xray")) errs.push("3D radiation must be X-ray or neutron.");
+    if (wavelengthValue(f3.wavelength ?? "moa1") == null)
+      errs.push(`3D wavelength “${f3.wavelength}” is neither a DISCUS symbol (moa1, cua1, aga1, …) nor a positive number of Å.`);
     f3.steps.forEach((s, k) => {
       const per = 1 / +s;
       if (!(+s > 0)) errs.push("3D grid steps must be positive.");
@@ -712,6 +715,19 @@ function validate(state) {
     if (bad) errs.push("Debye–Waller on: every B must be ≥ 0.001 Å² (DISCUS replaces smaller values by 1).");
   }
   return { errs, warns };
+}
+
+// DISCUS 6.23.01 wavelength symbols (lib_f90/element_data_mod.f90, per_symwl / per_wavel), Å;
+// the same 30 symbols discus-python's FourierConfig accepts.
+const WAVELENGTH_SYMBOLS = { tia1: 2.74841, tia2: 2.75207, tib: 2.51381, cra1: 2.28962, cra2: 2.29351, crb: 2.0848, fea1: 1.93597, fea2: 1.93991, feb: 1.75653, coa1: 1.78892, coa2: 1.79278, cob: 1.62075, cua1: 1.540592, cua2: 1.544343, cub: 1.39217, moa1: 0.70926, moa2: 0.713543, mob: 0.632253, aga1: 0.559363, aga2: 0.563775, agb: 0.49701, taa1: 0.215484, taa2: 0.22029, tab: 0.190076, wa1: 0.208992, wa2: 0.213813, wb: 0.184363, aua1: 0.180185, aua2: 0.185064, aub: 0.158971 };
+// λ in Å for a DISCUS symbol or a positive number; null otherwise
+function wavelengthValue(w) {
+  const s = String(w ?? "").trim();
+  if (!s) return null;
+  if (WAVELENGTH_SYMBOLS[s.toLowerCase()] != null) return WAVELENGTH_SYMBOLS[s.toLowerCase()];
+  if (!/^[+]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return null;
+  const x = +s;
+  return Number.isFinite(x) && x > 0 ? x : null;
 }
 
 // ---------------------------------------------------------------------------------- export
@@ -764,6 +780,6 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);
