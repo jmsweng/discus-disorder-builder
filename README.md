@@ -5,6 +5,15 @@ A static web page (live at https://jmsweng.github.io/discus-disorder-builder/) f
 
 ## What it does
 
+- **Start from a paper** ("From a paper" in the header): the page gives you a prompt to paste, together with the
+  paper's PDF (and SI/CIF), into Claude, ChatGPT or a similar assistant, with an optional box for your own notes
+  (phase, table to use, what the disorder is …), which go into the prompt. The chatbot only transcribes what the paper
+  reports, as a small JSON format in which every number can carry its source and a status (reported / derived /
+  assumed / your note). You paste the answer back; the page expands the space-group symmetry, computes the
+  orientation matrices from directions ("this bond along [111]", never Euler angles from the chatbot), checks the
+  result and lists every value with its source, unreported ones first, before you load it. Problems can be copied
+  back to the chat as a ready-made message. The paper, your notes, assumptions and what the model cannot represent
+  are kept with the model (Cell step).
 - **Cell and crystal**: lattice parameters (discus-python convention, a ∥ x, b in xy) and supercell size.
 - **Molecule builder**: atoms in Cartesian Å, templates (H2O, CO2, NH4+, CH4, C6H6, SF6, NO3-, …), pasted XYZ, or
   click-to-draw in a rotatable 3D view; anchor at centroid, centre of mass or one atom.
@@ -50,11 +59,14 @@ DISCUS's non-scattering `VOID` atoms placed where the site's largest occupant wo
 
 - `index.html` – the whole app in one file, built by `build.py` (committed so it also opens straight from a checkout).
 - `src/` – sources: `core.js` (maths, orientations, realisation, preview, export), `viewer.js`, `app.js`,
-  `examples.js`, `style.css`, `shell.html`.
+  `examples.js`, `paper.js`, `style.css`, `shell.html`.
 - `src/spacegroups.js` – symmetry operations and Wyckoff positions of the 230 space groups, generated with
   [PyXtal](https://github.com/MaterSim/PyXtal) 1.1.5 (MIT licence).
 - `engine.py` – the Python template the page fills in.
 - `build.py` – inlines `src/` and `engine.py` into `index.html`. Run it after editing anything in `src/` or `engine.py`.
+- `src/paper.js` – the "From a paper" prompt, the reader of the chatbot's JSON and its conversion into a model.
+- `tests/paper_test.js` – checks of `paper.js` (run `node tests/paper_test.js`), with `tests/paper_ice_vii.json`, an
+  extract of plastic ice VII (Rescigno et al., Nature 2025) in the format the prompt asks for.
 - `tests/node_test.js` – Node checks of the core; writes the generated example scripts to `$OUT` (default: the temp
   folder), which you can then run with `--dry-run`.
 
