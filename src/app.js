@@ -468,6 +468,13 @@ RENDER.mc = () => {
 };
 
 // ---- 7 calculations
+const WVL_NAMES = { moa1: "Mo Kα1", cua1: "Cu Kα1", aga1: "Ag Kα1", coa1: "Co Kα1", fea1: "Fe Kα1", cra1: "Cr Kα1", wa1: "W Kα1" };
+const WVL_LIST = `<datalist id="wvl-syms">${Object.entries(WVL_NAMES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</datalist>`;
+function wvlInfo(w) {
+  const s = String(w ?? "").trim(), x = DB.wavelengthValue(s);
+  if (x == null) return "not a DISCUS symbol or a positive number";
+  return DB.WAVELENGTH_SYMBOLS[s.toLowerCase()] ? `${s.toLowerCase()}${WVL_NAMES[s.toLowerCase()] ? ` (${WVL_NAMES[s.toLowerCase()]})` : ""} = ${x} Å` : `${x} Å`;
+}
 RENDER.calc = () => {
   const c = S.calc, f = c.fourier, p = c.pdf, A = lattice(), n = S.supercell.map(Number);
   const shape = f.steps.map((s, k) => 2 * Math.round(+f.hmax[k] / +s) + 1);
@@ -481,13 +488,16 @@ RENDER.calc = () => {
   <div class="block"><h3>${chk("calc.fourier.enabled", "3D diffuse scattering")}</h3>
     <div class="fields">${field("Step Δh Δk Δl (r.l.u.)", trio("calc.fourier.steps"))}<button type="button" class="btn small" data-a="step-commensurate">1 / supercell</button>
       ${field("Range ± h k l", trio("calc.fourier.hmax"))}</div>
+    <div class="fields">${field("Radiation", sel("calc.fourier.radiation", [["xray", "X-ray"], ["neutron", "neutron"]]))}
+      ${field("λ (DISCUS symbol or Å)", txt("calc.fourier.wavelength", 'class="w-s" list="wvl-syms"'))}${WVL_LIST}</div>
+    <p class="hint">The 3D runs write <code>disp off</code>, so λ only labels the output files; it does not change the intensities. The in-page preview always uses f = Z.</p>
     <div class="fields">${field("Bragg subtraction (set aver, %)", num("calc.fourier.aver_percent", 'min="0" max="100" class="w-s"'))}
       ${field("Friedel symmetry", sel("calc.fourier.symmetry", [["", "engine default"], ["friedel", "friedel"], ["ignore", "ignore"], ["apply", "apply"]]))}
       ${chk("calc.fourier.delta_pdf", "3D-ΔPDF from the diffuse volume")}${chk("calc.fourier.total", "Also total scattering + 3D-PDF (Patterson)")}</div>
     <dl class="facts"><dt>Grid</dt><dd>${shape.join(" × ")} = ${(vox / 1e6).toFixed(2)} M points</dd>
       <dt>3D-ΔPDF range</dt><dd>±${ext.map(x => fmt(x, 2)).join(", ± ")} cells${A ? ` (±${ext.map((x, k) => fmt(x * DB.norm(A[k]), 1)).join(", ±")} Å)` : ""}</dd>
       <dt>3D-ΔPDF voxel</dt><dd>${res.map(x => fmt(x, 3)).join(" × ")} cells${A ? ` (${res.map((x, k) => fmt(x * DB.norm(A[k]), 2)).join(" × ")} Å)` : ""}</dd>
-      <dt>Radiation</dt><dd>X-ray, Mo Kα1 (the only setting verified for discus-python's 3D runs)</dd></dl>
+      <dt>λ</dt><dd>${wvlInfo(f.wavelength)}</dd></dl>
     <details><summary>LOTS (average over sub-volumes)</summary><div class="fields" style="margin-top:8px">${chk("calc.fourier.lots.enabled", "use LOTS")}
       ${field("Shape", sel("calc.fourier.lots.shape", [["box", "box"], ["ellipsoid", "ellipsoid"]]))}${field("Size (cells)", trio("calc.fourier.lots.size", 'step="1" class="w-s"'))}
       ${field("Number", txt("calc.fourier.lots.count", 'class="w-s"'))}${chk("calc.fourier.lots.periodic", "periodic")}</div>
@@ -600,6 +610,8 @@ const TIPS_B = [
   [/^calc\.fourier\.steps\.\d$/, "Grid step in reciprocal lattice units. 1/n (n = supercell size) avoids finite-size ripples; 1/(2·step) cells is the 3D-ΔPDF range."],
   [/^calc\.fourier\.hmax\.\d$/, "The grid runs from −range to +range. Larger range, finer 3D-ΔPDF voxels."],
   [/^calc\.fourier\.aver_percent$/, "Percentage of unit cells used for the average structure that DISCUS subtracts (set aver). 100 = Bragg peaks removed exactly, 0 = total scattering."],
+  [/^calc\.fourier\.radiation$/, "X-ray or neutron scattering factors for the 3D runs (DISCUS xray / neut)."],
+  [/^calc\.fourier\.wavelength$/, "DISCUS wavelength symbol (moa1, cua1, aga1, mob, …) or a number in Å. With disp off it only labels the files."],
   [/^calc\.fourier\.symmetry$/, "How DISCUS uses Friedel symmetry to save time; engine default merges Friedel pairs."],
   [/^calc\.fourier\.delta_pdf$/, "Fourier-transform the diffuse volume into the 3D-ΔPDF (discus-python's fractional FFT)."],
   [/^calc\.fourier\.total$/, "Second DISCUS run with the Bragg peaks kept, and its 3D-PDF (Patterson). Doubles the run time."],

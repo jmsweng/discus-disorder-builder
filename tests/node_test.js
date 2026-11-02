@@ -19,3 +19,21 @@ for (const op of ["-y,x,z", "C3 [1 1 1]", "m [1 -1 0]", "S4 <0 0 1>", "-1", "R 3
 const hexA = DB.latticeMatrix({ a: 4, b: 4, c: 6, alpha: 90, beta: 90, gamma: 120 });
 console.log("hex x-y,x,z", DB.parseOp("x-y,x,z", hexA).R.map(r=>r.map(x=>x.toFixed(3))).join(" | "));
 console.log("Oh closure", DB.closure(["C4 [0 0 1]","C3 [1 1 1]","-1"].map(o=>DB.parseOp(o,A).R)).length);
+// 3D radiation / wavelength
+const assert = require("assert");
+assert.strictEqual(DB.wavelengthValue("moa1"), 0.70926);
+assert.strictEqual(DB.wavelengthValue(" CuA1 "), 1.540592);
+assert.strictEqual(DB.wavelengthValue("1.54"), 1.54);
+for (const bad of ["", "cuka", "0", "-1", "1.5x", "Infinity", "NaN"]) assert.strictEqual(DB.wavelengthValue(bad), null, bad);
+assert.strictEqual(Object.keys(DB.WAVELENGTH_SYMBOLS).length, 30);
+{
+  const s = EX.blank.make();
+  assert.deepStrictEqual([s.calc.fourier.radiation, s.calc.fourier.wavelength], ["xray", "moa1"]);
+  s.calc.fourier.wavelength = "cuka";
+  assert(DB.validate(s).errs.some(e => /wavelength/.test(e)));
+  s.calc.fourier.wavelength = "1.54"; s.calc.fourier.radiation = "neutron";
+  assert(!DB.validate(s).errs.some(e => /wavelength|radiation/.test(e)));
+  s.calc.fourier.radiation = "electron";
+  assert(DB.validate(s).errs.some(e => /radiation/.test(e)));
+}
+console.log("radiation/wavelength checks ok");

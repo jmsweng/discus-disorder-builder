@@ -974,10 +974,36 @@ def fourier_config(cfg: dict, calc3: dict, aver: float, outfile: str, seed8, lot
         lots = Lots(L.get("shape", "box"), tuple(int(x) for x in L["size"]),
                     "all" if str(L.get("count", "all")) == "all" else int(L["count"]), bool(L.get("periodic", True)))
     # an explicit 8-value seed is always written: needed for 0 < aver < 100 and random lots, harmless otherwise
-    return FourierConfig(grid, outputs=(("int", outfile),), aver_percent=aver, lots=lots,
-                         seed=Seed(tuple(seed8)),
-                         temperature="use" if cfg.get("calc", {}).get("debye_waller") else "ignore",
-                         symmetry=calc3.get("symmetry") or None)
+    # radiation / wavelength need discus-python with FourierConfig(radiation=…) (PR #62); the defaults are
+    # left out of the call so X-ray Mo Kα1 runs still work with an older discuspdf.
+    extra = {}
+    radiation = calc3.get("radiation") or "xray"
+    wavelength = fourier_wavelength(calc3.get("wavelength"))
+    if radiation != "xray":
+        extra["radiation"] = radiation
+    if wavelength != "moa1":
+        extra["wavelength"] = wavelength
+    try:
+        return FourierConfig(grid, outputs=(("int", outfile),), aver_percent=aver, lots=lots,
+                             seed=Seed(tuple(seed8)),
+                             temperature="use" if cfg.get("calc", {}).get("debye_waller") else "ignore",
+                             symmetry=calc3.get("symmetry") or None, **extra)
+    except (TypeError, ValueError) as e:
+        if "radiation" in str(e) or "only these were verified" in str(e):
+            raise SystemExit("This discuspdf has no FourierConfig(radiation=…); update discus-python "
+                             "(pip install -U \"discuspdf[data] @ git+https://github.com/jmsweng/discus-python\")") from e
+        raise
+
+
+def fourier_wavelength(w):
+    """The page's λ field: a DISCUS symbol ('moa1', 'cua1', …) or a number in Å; empty means 'moa1'."""
+    s = str(w if w is not None else "").strip()
+    if not s:
+        return "moa1"
+    try:
+        return float(s)
+    except ValueError:
+        return s.lower()
 
 
 def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True):
@@ -1184,7 +1210,8 @@ def main(argv=None) -> int:
     seed8 = seed8_from(rng_discus)
     f3 = calc.get("fourier", {})
     if f3.get("enabled"):
-        log("3D diffuse scattering (DISCUS fourier, Bragg subtracted) …")
+        log(f"3D diffuse scattering (DISCUS fourier, {f3.get('radiation') or 'xray'}, "
+            f"λ {fourier_wavelength(f3.get('wavelength'))}, Bragg subtracted) …")
         diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log,
                               aver=float(f3.get("aver_percent", 100.0)), name="diffuse")
         if diffuse is not None:
@@ -1943,6 +1970,9 @@ function validate(state) {
   }
   const f3 = state.calc.fourier;
   if (f3.enabled) {
+    if (!["xray", "neutron"].includes(f3.radiation || "xray")) errs.push("3D radiation must be X-ray or neutron.");
+    if (wavelengthValue(f3.wavelength ?? "moa1") == null)
+      errs.push(`3D wavelength “${f3.wavelength}” is neither a DISCUS symbol (moa1, cua1, aga1, …) nor a positive number of Å.`);
     f3.steps.forEach((s, k) => {
       const per = 1 / +s;
       if (!(+s > 0)) errs.push("3D grid steps must be positive.");
@@ -1968,6 +1998,19 @@ function validate(state) {
     if (bad) errs.push("Debye–Waller on: every B must be ≥ 0.001 Å² (DISCUS replaces smaller values by 1).");
   }
   return { errs, warns };
+}
+
+// DISCUS 6.23.01 wavelength symbols (lib_f90/element_data_mod.f90, per_symwl / per_wavel), Å;
+// the same 30 symbols discus-python's FourierConfig accepts.
+const WAVELENGTH_SYMBOLS = { tia1: 2.74841, tia2: 2.75207, tib: 2.51381, cra1: 2.28962, cra2: 2.29351, crb: 2.0848, fea1: 1.93597, fea2: 1.93991, feb: 1.75653, coa1: 1.78892, coa2: 1.79278, cob: 1.62075, cua1: 1.540592, cua2: 1.544343, cub: 1.39217, moa1: 0.70926, moa2: 0.713543, mob: 0.632253, aga1: 0.559363, aga2: 0.563775, agb: 0.49701, taa1: 0.215484, taa2: 0.22029, tab: 0.190076, wa1: 0.208992, wa2: 0.213813, wb: 0.184363, aua1: 0.180185, aua2: 0.185064, aub: 0.158971 };
+// λ in Å for a DISCUS symbol or a positive number; null otherwise
+function wavelengthValue(w) {
+  const s = String(w ?? "").trim();
+  if (!s) return null;
+  if (WAVELENGTH_SYMBOLS[s.toLowerCase()] != null) return WAVELENGTH_SYMBOLS[s.toLowerCase()];
+  if (!/^[+]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return null;
+  const x = +s;
+  return Number.isFinite(x) && x > 0 ? x : null;
 }
 
 // ---------------------------------------------------------------------------------- export
@@ -2020,7 +2063,7 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);
 
@@ -2044,6 +2087,7 @@ function base() {
       moves_per_atom: 10, feedback_per_atom: 1, temperature: 1 },
     calc: { launcher: "discus_suite -noautorun -macro", debye_waller: false, timeout_s: 86400,
       fourier: { enabled: true, steps: [0.1, 0.1, 0.1], hmax: [3, 3, 3], aver_percent: 100, delta_pdf: true, total: false, symmetry: "",
+        radiation: "xray", wavelength: "moa1",
         lots: { enabled: false, shape: "box", size: [5, 5, 5], count: "all", periodic: true } },
       pdf: { enabled: true, radiation: "xray", qmin: 0.5, qmax: 7.5, dq: 0.01, qsig: 0, rmax: 20, dr: 0.02, wavelength: "" },
       preview: { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 } },
@@ -2764,6 +2808,13 @@ RENDER.mc = () => {
 };
 
 // ---- 7 calculations
+const WVL_NAMES = { moa1: "Mo Kα1", cua1: "Cu Kα1", aga1: "Ag Kα1", coa1: "Co Kα1", fea1: "Fe Kα1", cra1: "Cr Kα1", wa1: "W Kα1" };
+const WVL_LIST = `<datalist id="wvl-syms">${Object.entries(WVL_NAMES).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</datalist>`;
+function wvlInfo(w) {
+  const s = String(w ?? "").trim(), x = DB.wavelengthValue(s);
+  if (x == null) return "not a DISCUS symbol or a positive number";
+  return DB.WAVELENGTH_SYMBOLS[s.toLowerCase()] ? `${s.toLowerCase()}${WVL_NAMES[s.toLowerCase()] ? ` (${WVL_NAMES[s.toLowerCase()]})` : ""} = ${x} Å` : `${x} Å`;
+}
 RENDER.calc = () => {
   const c = S.calc, f = c.fourier, p = c.pdf, A = lattice(), n = S.supercell.map(Number);
   const shape = f.steps.map((s, k) => 2 * Math.round(+f.hmax[k] / +s) + 1);
@@ -2777,13 +2828,16 @@ RENDER.calc = () => {
   <div class="block"><h3>${chk("calc.fourier.enabled", "3D diffuse scattering")}</h3>
     <div class="fields">${field("Step Δh Δk Δl (r.l.u.)", trio("calc.fourier.steps"))}<button type="button" class="btn small" data-a="step-commensurate">1 / supercell</button>
       ${field("Range ± h k l", trio("calc.fourier.hmax"))}</div>
+    <div class="fields">${field("Radiation", sel("calc.fourier.radiation", [["xray", "X-ray"], ["neutron", "neutron"]]))}
+      ${field("λ (DISCUS symbol or Å)", txt("calc.fourier.wavelength", 'class="w-s" list="wvl-syms"'))}${WVL_LIST}</div>
+    <p class="hint">The 3D runs write <code>disp off</code>, so λ only labels the output files; it does not change the intensities. The in-page preview always uses f = Z.</p>
     <div class="fields">${field("Bragg subtraction (set aver, %)", num("calc.fourier.aver_percent", 'min="0" max="100" class="w-s"'))}
       ${field("Friedel symmetry", sel("calc.fourier.symmetry", [["", "engine default"], ["friedel", "friedel"], ["ignore", "ignore"], ["apply", "apply"]]))}
       ${chk("calc.fourier.delta_pdf", "3D-ΔPDF from the diffuse volume")}${chk("calc.fourier.total", "Also total scattering + 3D-PDF (Patterson)")}</div>
     <dl class="facts"><dt>Grid</dt><dd>${shape.join(" × ")} = ${(vox / 1e6).toFixed(2)} M points</dd>
       <dt>3D-ΔPDF range</dt><dd>±${ext.map(x => fmt(x, 2)).join(", ± ")} cells${A ? ` (±${ext.map((x, k) => fmt(x * DB.norm(A[k]), 1)).join(", ±")} Å)` : ""}</dd>
       <dt>3D-ΔPDF voxel</dt><dd>${res.map(x => fmt(x, 3)).join(" × ")} cells${A ? ` (${res.map((x, k) => fmt(x * DB.norm(A[k]), 2)).join(" × ")} Å)` : ""}</dd>
-      <dt>Radiation</dt><dd>X-ray, Mo Kα1 (the only setting verified for discus-python's 3D runs)</dd></dl>
+      <dt>λ</dt><dd>${wvlInfo(f.wavelength)}</dd></dl>
     <details><summary>LOTS (average over sub-volumes)</summary><div class="fields" style="margin-top:8px">${chk("calc.fourier.lots.enabled", "use LOTS")}
       ${field("Shape", sel("calc.fourier.lots.shape", [["box", "box"], ["ellipsoid", "ellipsoid"]]))}${field("Size (cells)", trio("calc.fourier.lots.size", 'step="1" class="w-s"'))}
       ${field("Number", txt("calc.fourier.lots.count", 'class="w-s"'))}${chk("calc.fourier.lots.periodic", "periodic")}</div>
@@ -2896,6 +2950,8 @@ const TIPS_B = [
   [/^calc\.fourier\.steps\.\d$/, "Grid step in reciprocal lattice units. 1/n (n = supercell size) avoids finite-size ripples; 1/(2·step) cells is the 3D-ΔPDF range."],
   [/^calc\.fourier\.hmax\.\d$/, "The grid runs from −range to +range. Larger range, finer 3D-ΔPDF voxels."],
   [/^calc\.fourier\.aver_percent$/, "Percentage of unit cells used for the average structure that DISCUS subtracts (set aver). 100 = Bragg peaks removed exactly, 0 = total scattering."],
+  [/^calc\.fourier\.radiation$/, "X-ray or neutron scattering factors for the 3D runs (DISCUS xray / neut)."],
+  [/^calc\.fourier\.wavelength$/, "DISCUS wavelength symbol (moa1, cua1, aga1, mob, …) or a number in Å. With disp off it only labels the files."],
   [/^calc\.fourier\.symmetry$/, "How DISCUS uses Friedel symmetry to save time; engine default merges Friedel pairs."],
   [/^calc\.fourier\.delta_pdf$/, "Fourier-transform the diffuse volume into the 3D-ΔPDF (discus-python's fractional FFT)."],
   [/^calc\.fourier\.total$/, "Second DISCUS run with the Bragg peaks kept, and its 3D-PDF (Patterson). Doubles the run time."],

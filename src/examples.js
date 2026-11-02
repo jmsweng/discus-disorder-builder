@@ -16,6 +16,7 @@ function base() {
       moves_per_atom: 10, feedback_per_atom: 1, temperature: 1 },
     calc: { launcher: "discus_suite -noautorun -macro", debye_waller: false, timeout_s: 86400,
       fourier: { enabled: true, steps: [0.1, 0.1, 0.1], hmax: [3, 3, 3], aver_percent: 100, delta_pdf: true, total: false, symmetry: "",
+        radiation: "xray", wavelength: "moa1",
         lots: { enabled: false, shape: "box", size: [5, 5, 5], count: "all", periodic: true } },
       pdf: { enabled: true, radiation: "xray", qmin: 0.5, qmax: 7.5, dq: 0.01, qsig: 0, rmax: 20, dr: 0.02, wavelength: "" },
       preview: { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 } },
