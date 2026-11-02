@@ -117,9 +117,11 @@ def occupant_classes(site: dict, orient: dict) -> list[dict]:
             raise ValueError(f"site {site['label']}: negative probability")
         if p == 0:
             continue
+        # per-occupant disorder overrides (None: use the defaults of the Disorder step)
+        over = {k: (None if occ.get(k) in (None, "") else float(occ[k])) for k in ("sigma", "trans", "lib")}
         if occ["type"] == "atom":
             classes.append({"type": "atom", "species": occ["species"], "p": p,
-                            "b": occ.get("b"), "key": f"atom:{occ['species']}"})
+                            "b": occ.get("b"), "key": f"atom:{occ['species']}", **over})
         elif occ["type"] == "vacancy":
             classes.append({"type": "vacancy", "p": p, "key": "vacancy"})
         elif occ["type"] == "molecule":
@@ -128,7 +130,7 @@ def occupant_classes(site: dict, orient: dict) -> list[dict]:
                 if wk > 0:
                     classes.append({"type": "molecule", "molecule": mol, "R": R, "p": p * wk,
                                     "b": occ.get("b"), "key": f"mol:{occ['group']}:{k}",
-                                    "group": occ["group"], "index": k})
+                                    "group": occ["group"], "index": k, **over})
         else:
             raise ValueError(f"unknown occupant type {occ['type']!r}")
     total = sum(c["p"] for c in classes)
@@ -292,6 +294,7 @@ def build_structure(cfg: dict, seed: int, log):
     b_iso = np.ones(N)
     molecule_id = np.full(N, -1, dtype=np.int64)    # which molecule an atom belongs to (-1: none)
     is_void = np.zeros(N, dtype=bool)
+    sigma_row = np.full(N, np.nan)                  # per-occupant displacement σ (NaN: species default)
 
     row = 0
     mol_counter = 0
@@ -311,8 +314,10 @@ def build_structure(cfg: dict, seed: int, log):
                         bs = [float(c["b"]) if c.get("b") is not None else b_site]
                     elif c["type"] == "molecule":
                         msp, local = mols[c["molecule"]]
-                        R = c["R"] @ random_small_rotation(rng, lib_sigma)
-                        shift = rng.normal(scale=t_sigma, size=3) if t_sigma > 0 else 0.0
+                        lib = lib_sigma if c.get("lib") is None else c["lib"]
+                        trans = t_sigma if c.get("trans") is None else c["trans"]
+                        R = c["R"] @ random_small_rotation(rng, lib)
+                        shift = rng.normal(scale=trans, size=3) if trans > 0 else 0.0
                         sp, pos = msp, centre + shift + local @ R.T
                         bs = [float(c["b"]) if c.get("b") is not None else b_site] * len(msp)
                     else:
@@ -326,6 +331,8 @@ def build_structure(cfg: dict, seed: int, log):
                             species[r] = sp[j]
                             cart[r] = pos[j]
                             b_iso[r] = bs[j]
+                            if c.get("sigma") is not None:
+                                sigma_row[r] = c["sigma"]
                             if c["type"] == "molecule":
                                 molecule_id[r] = mol_counter
                         else:
@@ -336,14 +343,15 @@ def build_structure(cfg: dict, seed: int, log):
                         mol_counter += 1
                     row += slots[s]
 
-    # static Gaussian displacements per species
-    sig = dis.get("atomic_displacements", {}) or {}
-    for sp_name, sigma in sig.items():
-        sigma = float(sigma)
-        if sigma <= 0:
-            continue
-        sel = (species == sp_name) & ~is_void
-        cart[sel] += rng.normal(scale=sigma, size=(int(sel.sum()), 3))
+    # static Gaussian displacements: per-occupant σ where given, else the species default
+    sig = {k: float(v) for k, v in (dis.get("atomic_displacements", {}) or {}).items()}
+    sigma = np.array([sig.get(s, 0.0) for s in species])
+    sigma = np.where(np.isfinite(sigma_row), sigma_row, sigma)
+    sigma[is_void] = 0.0
+    if np.any(sigma < 0):
+        raise ValueError("displacement σ must be >= 0")
+    move = sigma > 0
+    cart[move] += rng.normal(size=(int(move.sum()), 3)) * sigma[move, None]
 
     frac_unit = cart @ Ainv                           # unit-cell fractions
     if cfg.get("wrap", False):   # off by default: DISCUS lists atoms by cell, molecules stay whole

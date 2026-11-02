@@ -250,14 +250,16 @@ function siteClasses(site, otab) {
   for (const o of site.occupants) {
     const p = +o.p;
     if (!(p > 0)) continue;
-    if (o.type === "atom") cls.push({ type: "atom", species: o.species, p, b: o.b, key: "atom:" + o.species });
+    const ov = k => (o[k] === "" || o[k] == null || !isFinite(+o[k]) ? null : +o[k]);
+    const over = { sigma: ov("sigma"), trans: ov("trans"), lib: ov("lib") };
+    if (o.type === "atom") cls.push({ type: "atom", species: o.species, p, b: o.b, key: "atom:" + o.species, ...over });
     else if (o.type === "vacancy") cls.push({ type: "vacancy", p, key: "vacancy" });
     else if (o.type === "molecule") {
       const t = otab[o.group];
       if (!t) continue;
       const ws = t.weights.reduce((x, y) => x + y, 0) || 1;
       t.orientations.forEach((or, k) => {
-        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}` });
+        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}`, ...over });
       });
     }
   }
@@ -338,18 +340,19 @@ function realize(state, opts = {}) {
       const cl = classes[s][choice[s][c]];
       if (!cl) return;
       const centre = frac2cart(A, add([x, y, z], site.frac.map(Number)));
-      if (cl.type === "atom") atoms.push({ el: cl.species, p: centre, cell: [x, y, z], site: s, cls: choice[s][c], mol: -1 });
+      if (cl.type === "atom") atoms.push({ el: cl.species, p: centre, cell: [x, y, z], site: s, cls: choice[s][c], mol: -1, sigma: cl.sigma });
       else if (cl.type === "molecule") {
         const loc = moleculeLocal(cl.mol);
         let R = cl.R;
-        if (lS > 0) { const ax = [rnd.normal(), rnd.normal(), rnd.normal()]; R = mul(R, axisAngle(ax, rnd.normal() * lS)); }
-        const sh = tS > 0 ? [rnd.normal() * tS, rnd.normal() * tS, rnd.normal() * tS] : [0, 0, 0];
-        loc.xyz.forEach((p, j) => atoms.push({ el: loc.species[j], p: add(add(centre, sh), mv(R, p)), cell: [x, y, z], site: s, cls: choice[s][c], mol: molCount, orient: cl.index, group: cl.group }));
+        const l = cl.lib == null ? lS : cl.lib, t = cl.trans == null ? tS : cl.trans;
+        if (l > 0) { const ax = [rnd.normal(), rnd.normal(), rnd.normal()]; R = mul(R, axisAngle(ax, rnd.normal() * l)); }
+        const sh = t > 0 ? [rnd.normal() * t, rnd.normal() * t, rnd.normal() * t] : [0, 0, 0];
+        loc.xyz.forEach((p, j) => atoms.push({ el: loc.species[j], p: add(add(centre, sh), mv(R, p)), cell: [x, y, z], site: s, cls: choice[s][c], mol: molCount, orient: cl.index, group: cl.group, sigma: cl.sigma }));
         molCount++;
       }
     });
   }
-  for (const a of atoms) { const s = +disp[a.el] || 0; if (s > 0) a.p = add(a.p, [rnd.normal() * s, rnd.normal() * s, rnd.normal() * s]); }
+  for (const a of atoms) { const s = a.sigma != null ? a.sigma : (+disp[a.el] || 0); if (s > 0) a.p = add(a.p, [rnd.normal() * s, rnd.normal() * s, rnd.normal() * s]); }
   return { atoms, n, A, report, classes, nMolecules: molCount };
 }
 
@@ -430,6 +433,7 @@ function validate(state) {
         else if (t.orientations.some((x, k) => x.improper && t.weights[k] > 0)) warns.push(`Group “${t.group.name}” uses improper operations: those orientations are mirror images of the molecule.`);
       }
       if (+o.p < 0) errs.push(`Site ${s.label}: negative probability.`);
+      ["sigma", "trans", "lib"].forEach(k => { if (o[k] !== "" && o[k] != null && !(+o[k] >= 0)) errs.push(`Site ${s.label}: disorder values must be ≥ 0.`); });
     });
   });
   const hasMol = state.sites.some(s => s.occupants.some(o => o.type === "molecule" && +o.p > 0));
@@ -491,8 +495,9 @@ function buildConfig(state) {
     supercell: state.supercell.map(Number), molecules, orientations,
     sites: state.sites.map(s => ({
       label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw,
-      occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b) }
-        : o.type === "molecule" ? { type: "molecule", group: o.group, p: +o.p, b: num(o.b) } : { type: "vacancy", p: +o.p }),
+      occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b), sigma: num(o.sigma) }
+        : o.type === "molecule" ? { type: "molecule", group: o.group, p: +o.p, b: num(o.b), sigma: num(o.sigma), trans: num(o.trans), lib: num(o.lib) }
+        : { type: "vacancy", p: +o.p }),
     })),
     disorder: {
       atomic_displacements: Object.fromEntries(Object.entries(state.disorder.atomic_displacements).filter(([, v]) => +v > 0).map(([k, v]) => [k, +v])),

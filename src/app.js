@@ -65,6 +65,7 @@ function renderSection() {
   const y = window.scrollY;
   ed.innerHTML = fn();
   if (AFTER[section]) AFTER[section]();
+  applyTips(ed);
   window.scrollTo(0, y);
 }
 const num = (path, attrs = "") => `<input type="number" step="any" data-b="${path}" data-t="num" value="${esc(getPath(path))}" ${attrs}>`;
@@ -284,15 +285,36 @@ RENDER.disorder = () => {
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Neighbour site</th><th>Cell offset t</th><th>J (kT)</th><th>P(same) preview</th><th></th></tr></thead><tbody>${inter}</tbody></table></div>
     <div class="fields"><button type="button" class="btn small" data-a="int-add">Add pair</button>
       ${S.sites.length ? `<button type="button" class="btn small" data-a="int-axes">Add ±a, ±b, ±c neighbours of ${esc(S.sites[0].label)}</button>` : ""}</div></div>
-  <div class="block"><h3>Rigid-body disorder of molecules</h3><div class="fields">
+  <div class="block"><h3>Rigid-body disorder of molecules (default)</h3><div class="fields">
     ${field("Translation σ (Å)", num("disorder.molecule_rigid.translation_sigma"))}${field("Libration σ (°)", num("disorder.molecule_rigid.libration_sigma_deg"))}</div>
     <p class="hint">Each molecule gets a Gaussian shift and a small rotation about a random axis on top of its preferred orientation. These are static (frozen) displacements, so they appear as diffuse scattering rather than as a Debye–Waller factor.</p></div>
-  <div class="block"><h3>Atomic displacements</h3><div class="fields">
+  <div class="block"><h3>Atomic displacements (default per element)</h3><div class="fields">
     ${sp.length ? sp.map(s => field(`σ ${esc(s)} (Å)`, `<input type="number" step="any" min="0" data-b="disorder.atomic_displacements.${esc(s)}" data-t="num" value="${esc(d.atomic_displacements[s] || 0)}">`)).join("") : '<span class="hint">No species yet.</span>'}</div>
     <p class="hint">Independent Gaussian displacements per atom (all three directions). Applied to molecule atoms too, which then distorts the molecules slightly.</p></div>
+  ${perOccupant()}
   <div class="block"><h3>Contact check</h3><div class="fields">${field("Warn below (Å)", num("disorder.clash_threshold", 'class="w-s"'))}</div>
     <p class="hint">The script reports atoms of different molecules or sites that come closer than this.</p></div>`;
 };
+
+function perOccupant() {
+  const d = S.disorder, rig = d.molecule_rigid;
+  const rows = [];
+  S.sites.forEach((s, si) => s.occupants.forEach((o, oi) => {
+    if (o.type === "vacancy") return;
+    const p = `sites.${si}.occupants.${oi}`;
+    const g = o.type === "molecule" ? S.orientations.find(x => x.id === o.group) : null;
+    const name = o.type === "atom" ? esc(o.species) : `${esc(g ? g.name : "?")} <span class="tag">molecule</span>`;
+    const dflt = o.type === "atom" ? `${+d.atomic_displacements[o.species] || 0}` : "element";
+    const inp = (k, ph, tip) => `<input type="number" step="any" min="0" class="w-s" data-b="${p}.${k}" data-t="numornull" value="${esc(o[k] == null ? "" : o[k])}" placeholder="${esc(ph)}" title="${esc(tip)}">`;
+    rows.push(`<tr><td>${esc(s.label)}</td><td>${name}</td><td class="num">${fmt(+o.p, 3)}</td>
+      <td>${inp("sigma", dflt, "Gaussian displacement of each atom of this occupant (Å). Empty: the element default above.")}</td>
+      <td>${o.type === "molecule" ? inp("trans", `${+rig.translation_sigma || 0}`, "Gaussian shift of the whole molecule (Å). Empty: the default above.") : ""}</td>
+      <td>${o.type === "molecule" ? inp("lib", `${+rig.libration_sigma_deg || 0}`, "Gaussian rotation of the whole molecule about a random axis (°). Empty: the default above.") : ""}</td></tr>`);
+  }));
+  return `<div class="block"><h3>Per site and occupant</h3>
+    <p class="hint">Different amounts of disorder for each atom or molecule in the cell. An empty field uses the default shown in grey; a value replaces it for that occupant only (0 switches it off).</p>
+    ${rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Site</th><th>Occupant</th><th>p</th><th>Atomic σ (Å)</th><th>Translation σ (Å)</th><th>Libration σ (°)</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>` : '<p class="hint">No occupants yet.</p>'}</div>`;
+}
 
 // ---- 6 Monte Carlo (DISCUS mmc)
 RENDER.mc = () => {
@@ -386,6 +408,132 @@ python ${esc(fileBase())}.py                  # full run</pre>
 };
 const fileBase = () => (S.title || "model").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "model";
 function withState() { return S; }
+
+// ------------------------------------------------------------------------------------------ tooltips
+const TIPS_B = [
+  [/^title$/, "Name of the model; used for the script file name and DISCUS titles."],
+  [/^seed$/, "Seeds every random choice in the script (occupants, displacements, DISCUS seeds). Same seed, same crystal."],
+  [/^output_dir$/, "Folder the script writes into (relative to where you run it). --out overrides it."],
+  [/^cell\.(a|b|c)$/, "Unit-cell edge length in Å."],
+  [/^cell\.(alpha|beta|gamma)$/, "Unit-cell angle in degrees: α = b∧c, β = a∧c, γ = a∧b."],
+  [/^supercell\.\d$/, "Number of unit cells along a, b, c. Larger crystals give smoother diffuse scattering but take longer."],
+  [/^molecules\.\d+\.name$/, "Name shown in lists and in the script."],
+  [/^molecules\.\d+\.anchor$/, "The point of the molecule placed exactly on the site position."],
+  [/atoms\.\d+\.el$/, "Element symbol (DISCUS needs real element names, at most 4 characters)."],
+  [/atoms\.\d+\.xyz\.\d$/, "Cartesian coordinate in Å, in the cell's frame (x ∥ a, y in the ab plane)."],
+  [/^orientations\.\d+\.name$/, "Name of this orientation group, shown when a site picks a molecule."],
+  [/^orientations\.\d+\.molecule$/, "The molecule these orientations are applied to."],
+  [/^orientations\.\d+\.convention$/, "Order of the three rotation axes for the Euler angles (intrinsic, active rotations)."],
+  [/^orientations\.\d+\.euler\.\d$/, "Euler angle in degrees giving the base orientation before symmetry operations."],
+  [/^orientations\.\d+\.frame$/, "Crystal frame: operations rotate the already-oriented molecule about crystal axes. Molecule frame: operations act on the molecule before the base orientation."],
+  [/^orientations\.\d+\.closure$/, "Combine the operations until they form a closed group (e.g. C4 + C3[111] → 24 rotations). Off: base orientation plus each operation once."],
+  [/^orientations\.\d+\.ops$/, "One operation per line, e.g. C4 [0 0 1], m [1 -1 0], -1, R 30 [1 1 1] or -y,x,z."],
+  [/^orientations\.\d+\.weights\.\d+$/, "Relative weight of this orientation within the group; 0 removes it."],
+  [/^sites\.\d+\.label$/, "Site name (1–10 letters, digits or _)."],
+  [/^sites\.\d+\.frac\.\d$/, "Fractional coordinate of the site in the unit cell."],
+  [/^sites\.\d+\.b_iso$/, "Isotropic B (Å²) of atoms on this site; used only with Debye–Waller switched on."],
+  [/^sites\.\d+\.draw$/, "Independent: each cell drawn separately, composition fluctuates. Exact: the crystal has exactly the given fractions, shuffled."],
+  [/occupants\.\d+\.type$/, "What can occupy the site: an atom, a molecule from an orientation group, or nothing."],
+  [/occupants\.\d+\.species$/, "Element symbol of the atom."],
+  [/occupants\.\d+\.group$/, "Orientation group: the molecule takes one of the group's orientations, chosen by their weights."],
+  [/occupants\.\d+\.p$/, "Probability of this occupant; the probabilities of a site add up to 1."],
+  [/occupants\.\d+\.b$/, "B (Å²) for this occupant only; empty uses the site B."],
+  [/^disorder\.correlations\.enabled$/, "Run the swap Monte Carlo that correlates neighbouring occupants."],
+  [/^disorder\.correlations\.sweeps$/, "Swap attempts per cell and site, repeated this many times. More sweeps, closer to equilibrium."],
+  [/^disorder\.correlations\.kT$/, "Temperature in the units of J. Smaller kT makes the correlations stronger."],
+  [/^disorder\.correlations\.match$/, "Whether two molecules count as 'the same' only in the same orientation, or whenever they come from the same group."],
+  [/interactions\.\d+\.site_a$/, "Site of the first occupant of the pair."],
+  [/interactions\.\d+\.site_b$/, "Site of the neighbour."],
+  [/interactions\.\d+\.t\.\d$/, "Cell offset from the first site's cell to the neighbour's cell (whole cells)."],
+  [/interactions\.\d+\.J$/, "Energy (kT) when both hold the same occupant: negative favours like neighbours, positive unlike."],
+  [/^disorder\.molecule_rigid\.translation_sigma$/, "Default Gaussian shift of each whole molecule (Å, per direction)."],
+  [/^disorder\.molecule_rigid\.libration_sigma_deg$/, "Default Gaussian rotation of each molecule about a random axis (degrees)."],
+  [/^disorder\.atomic_displacements\./, "Default Gaussian displacement of every atom of this element (Å, per direction)."],
+  [/^disorder\.clash_threshold$/, "The script warns about atoms of different molecules or sites closer than this (Å)."],
+  [/^mmc\.enabled$/, "Run DISCUS mmc on the built crystal before the scattering calculation (atom-only models)."],
+  [/^mmc\.moves_per_atom$/, "Trial moves per atom (× atoms = DISCUS set cyc)."],
+  [/^mmc\.feedback_per_atom$/, "How often (per atom) DISCUS reports and adjusts energies for correlation targets."],
+  [/^mmc\.temperature$/, "kT in the energy units of the targets; keep 1 with correlation targets."],
+  [/^mmc\.neighborhoods\.\d+\.symmetric$/, "Also add each vector in the opposite direction."],
+  [/vectors\.\d+\.origin$/, "Site the vector starts from (DISCUS site number)."],
+  [/vectors\.\d+\.target$/, "Site the vector points to."],
+  [/vectors\.\d+\.t\.\d$/, "Cell offset of the target site (whole cells)."],
+  [/targets\.\d+\.type$/, "Occupational: chemical short-range order. Displacement: correlated shifts. Spring / Lennard-Jones: size effect."],
+  [/targets\.\d+\.neighborhood$/, "Which neighbourhood the target acts on."],
+  [/targets\.\d+\.(a|b)$/, "Species of the pair the target acts on."],
+  [/targets\.\d+\.mode$/, "Target correlation (DISCUS adjusts the energy to reach it) or a fixed energy."],
+  [/targets\.\d+\.value$/, "Correlation in −1…1, or energy in kT."],
+  [/targets\.\d+\.direction\.\d$/, "Direction of the correlated displacement (Cartesian)."],
+  [/targets\.\d+\.distance$/, "Preferred pair distance (Å)."],
+  [/targets\.\d+\.k$/, "Spring constant."],
+  [/targets\.\d+\.depth$/, "Depth of the Lennard-Jones well."],
+  [/^mmc\.moves\.swap$/, "Relative probability of swapping two atoms' species."],
+  [/^mmc\.moves\.pairing$/, "Which atoms may be swapped: all, local neighbours, or same site."],
+  [/^mmc\.moves\.shift$/, "Relative probability of moving one atom by a random shift."],
+  [/^mmc\.moves\.swap_displacement$/, "Relative probability of swapping two atoms together with their displacements."],
+  [/^mmc\.moves\.shift_sigma\./, "Size (Å) of the random shift for this element."],
+  [/^calc\.launcher$/, "Command that starts DISCUS with a macro; the script adds run.mac and runs it in each run folder."],
+  [/^calc\.timeout_s$/, "Stop a DISCUS run after this many seconds."],
+  [/^calc\.debye_waller$/, "Apply each atom's B as a Debye–Waller factor (temp use). Off: B is ignored (temp ignore)."],
+  [/^calc\.fourier\.enabled$/, "Compute the 3D diffuse scattering with DISCUS."],
+  [/^calc\.fourier\.steps\.\d$/, "Grid step in reciprocal lattice units. 1/n (n = supercell size) avoids finite-size ripples; 1/(2·step) cells is the 3D-ΔPDF range."],
+  [/^calc\.fourier\.hmax\.\d$/, "The grid runs from −range to +range. Larger range, finer 3D-ΔPDF voxels."],
+  [/^calc\.fourier\.aver_percent$/, "Percentage of unit cells used for the average structure that DISCUS subtracts (set aver). 100 = Bragg peaks removed exactly, 0 = total scattering."],
+  [/^calc\.fourier\.symmetry$/, "How DISCUS uses Friedel symmetry to save time; engine default merges Friedel pairs."],
+  [/^calc\.fourier\.delta_pdf$/, "Fourier-transform the diffuse volume into the 3D-ΔPDF (discus-python's fractional FFT)."],
+  [/^calc\.fourier\.total$/, "Second DISCUS run with the Bragg peaks kept, and its 3D-PDF (Patterson). Doubles the run time."],
+  [/^calc\.fourier\.lots\.enabled$/, "Average the diffuse scattering over sub-volumes (LOTS) instead of the whole crystal."],
+  [/^calc\.fourier\.lots\.shape$/, "Shape of each lot."],
+  [/^calc\.fourier\.lots\.size\.\d$/, "Lot size in unit cells."],
+  [/^calc\.fourier\.lots\.count$/, "Number of lots at random positions, or 'all' (one per cell)."],
+  [/^calc\.fourier\.lots\.periodic$/, "Lots wrap around the crystal edges."],
+  [/^calc\.pdf\.enabled$/, "Compute the 1D powder PDF of the supercell with DISCUS (Debye sum)."],
+  [/^calc\.pdf\.radiation$/, "X-ray or neutron scattering factors."],
+  [/^calc\.pdf\.qmin$/, "Lowest Q of the powder pattern (Å⁻¹)."],
+  [/^calc\.pdf\.qmax$/, "Highest Q used in the PDF transform (Å⁻¹); DISCUS caps it at ≈ 12.3/λ."],
+  [/^calc\.pdf\.dq$/, "Q step of the powder pattern (Å⁻¹)."],
+  [/^calc\.pdf\.qsig$/, "Gaussian width of the powder pattern convolution (DISCUS set delta); 0 = none."],
+  [/^calc\.pdf\.wavelength$/, "Wavelength in Å; empty uses 1.5406 (X-ray) or 1.54 (neutron)."],
+  [/^calc\.pdf\.rmax$/, "Largest r of G(r) (Å)."],
+  [/^calc\.pdf\.dr$/, "r step of G(r) (Å); rmax must be a whole number of steps."],
+];
+const TIPS_A = {
+  "supercell": "Set the same number of cells along a, b and c.", "example": "Replace the current model with this example.",
+  "mol-add": "Start a new molecule with one carbon atom.", "mol-select": "Edit this molecule.", "mol-dup": "Copy this molecule.",
+  "mol-del": "Delete this molecule (only when no orientation group uses it).", "atom-add": "Add an atom at the origin.",
+  "atom-del": "Remove this atom.", "atom-pick": "Highlight this atom in the view.", "mol-centre": "Shift the coordinates so the anchor is at 0, 0, 0.",
+  "xyz-import": "Replace the atoms with the pasted 'Element x y z' lines.", "place-toggle": "Click in the view to add atoms of the element on the right.",
+  "mol-view": "Look along this axis.", "grp-add": "Create a new orientation group.", "grp-select": "Edit this orientation group.",
+  "grp-dup": "Copy this group.", "grp-del": "Delete this group (only when no site uses it).", "op-add": "Append this operation.",
+  "mat-show": "Show the rotation matrix of this orientation.", "site-add": "Add a site to the unit cell.", "site-del": "Remove this site.",
+  "occ-add": "Add an occupant with probability 0; then set its probability.", "occ-del": "Remove this occupant.",
+  "occ-norm": "Scale the probabilities so they add up to 1.", "int-add": "Add a neighbour pair with an energy J.",
+  "int-axes": "Add pairs along +a, +b and +c (the reverse directions are included automatically).", "int-del": "Remove this pair.",
+  "nb-add": "Add a DISCUS neighbourhood.", "nb-del": "Remove this neighbourhood and its targets.", "vec-add": "Add a neighbour vector.",
+  "vec-axes": "Add vectors to the same site one cell along a, b and c.", "vec-del": "Remove this vector.", "tg-add": "Add an mmc target.",
+  "tg-del": "Remove this target.", "launcher": "Fill in the usual command for this setup.", "step-commensurate": "Set the grid steps to 1/n₁, 1/n₂, 1/n₃.",
+  "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
+  "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
+  "reseed": "Draw another random crystal for the preview.", "cells": "Number of cells shown per axis.", "color": "Colour the atoms by this property.",
+  "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.",
+};
+const TIPS_ID = {
+  "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
+  "pv-n": "Size of each random preview crystal (cells per axis, at most the supercell).",
+  "pv-d": "Number of independent random crystals averaged; more crystals, less speckle.",
+  "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
+};
+function applyTips(root) {
+  $$("[data-b]", root).forEach(el => {
+    const hit = TIPS_B.find(([re]) => re.test(el.dataset.b));
+    if (!hit) return;
+    const host = el.closest("label.f, label.chk") || el;
+    if (!host.title) host.title = hit[1];
+    if (!el.title) el.title = hit[1];
+  });
+  $$("[data-a]", root).forEach(el => { if (!el.title && TIPS_A[el.dataset.a]) el.title = TIPS_A[el.dataset.a]; });
+  Object.entries(TIPS_ID).forEach(([id, t]) => { const el = root.querySelector ? root.querySelector("#" + id) : null; if (el) { el.title = t; const l = el.closest("label.f"); if (l) l.title = t; } });
+}
 
 // ------------------------------------------------------------------------------------------ actions
 const ACT = {
@@ -586,6 +734,7 @@ function renderBenchControls() {
   const names = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
   $("#planes").innerHTML = Object.entries(names).map(([k, v]) => `<button type="button" class="btn small" data-a="plane" data-v="${k}" aria-pressed="${JSON.stringify(v) === key}">${k === "hhl" ? "hhl" : k}</button>`).join("");
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
+  applyTips($("#planes"));
 }
 function runDiffuse() {
   const job = ++diffuseJob;
@@ -643,6 +792,7 @@ function boot() {
   $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown)));
   $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode)));
   renderBenchControls();
+  applyTips(document);
   updatePreview();
   setTimeout(runDiffuse, 400);
   if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawCrystal(); if (molViewer) drawMolecule(); });
