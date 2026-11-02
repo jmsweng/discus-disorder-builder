@@ -83,38 +83,57 @@ const EXAMPLE = `{
 
 function buildPrompt(notes) {
   const n = String(notes || "").trim();
-  return `You will help a scientist turn the crystal structure reported in the attached paper into a model for the DISCUS Disorder Builder (https://jmsweng.github.io/discus-disorder-builder/), which builds disordered crystal models for diffuse-scattering and PDF calculations.
+  const schoenflies = Object.keys(POINT_GROUPS).join(", ");
+  const hm = Object.keys(HM).map(k => `"${k}"`).join(", ");
+  return `You will help a scientist turn the crystal structure reported in the attached paper into a model of a disordered crystal for diffuse-scattering and PDF calculations. A program will read your answer, so it must follow the format below exactly. Everything you need is in this message; you do not need to look anything up.
 
-Read the whole paper, including its supplementary information and any attached CIF files. Then reply with ONE JSON object in a single \`\`\`json code block, following the format below. A short note before the code block is fine, but put nothing after it.
+Read the whole paper, including its supplementary information and any attached CIF files. Then reply with ONE JSON object in a single \`\`\`json code block. A short note before the code block is fine, but put nothing after it.
 
 YOUR JOB IS TO TRANSCRIBE, NOT TO CALCULATE
-- Report the unit cell, space group and atom sites as the paper (or its CIF) gives them. The builder applies the space-group symmetry and computes all orientation matrices itself.
+- Report the unit cell, space group and atom sites as the paper (or its CIF) gives them. The program applies the space-group symmetry and computes all orientation matrices itself.
 - Never compute Euler angles or rotation matrices. Describe each preferred molecular orientation with directions (see "orientation_groups").
 
 NUMBERS AND SOURCES
-- Every number may be written plainly or as { "value": ..., "source": "...", "status": "..." }. Use the long form for every number that matters: cell, coordinates, occupancies, B or U values, displacements, distances, wavelengths.
+- Every number may be written plainly or as { "value": ..., "source": "...", "status": "..." }; a list of three numbers may be wrapped the same way. Use the long form for every number that matters: cell, coordinates, occupancies, B or U values, displacements, distances, wavelengths.
 - "source" says where it came from: "Table 2", "p. 5", "Fig. 3 caption", "Table S4", "CIF", "user note".
 - "status" is one of: "reported" (stated in the paper or CIF), "derived" (calculated by you from reported values; say how in "source"), "assumed" (not in the paper; your reasonable choice), "user" (from the user's notes below).
 - Never mark a guessed value as "reported". If the paper does not give something the model needs, choose a sensible value, mark it "assumed" and add a sentence to "assumptions".
-- Units: Å for lengths, degrees for angles, Å² for B and U. Coordinates are fractions of the unit cell. Write numbers as JSON numbers, not strings. No comments in the JSON.
+- Units: Å for lengths, degrees for angles, Å² for B and U. Coordinates are fractions of the unit cell. Write numbers as JSON numbers, not strings. No comments, no trailing commas. Keys not listed below are ignored.
 
-FORMAT RULES
-- "space_group": Hermann–Mauguin symbol and number in the ITA standard setting (monoclinic unique axis b, origin choice 2, rhombohedral groups on hexagonal axes). If the paper uses another setting, convert the cell and coordinates to the standard setting, mark them "derived" and say so in "assumptions". If there is no space group, use null.
-- "sites_are": "asymmetric_unit" when you list one position per Wyckoff site (the builder then generates all equivalent positions), "all_positions" when you list every position in the unit cell yourself (then space_group may be null).
-- "sites": one entry per crystallographic site. List everything that can sit on the same position as occupants of that one site: atoms, molecules and vacancies. Occupancies of a site add up to 1 (a missing remainder is read as vacancy). Give "b_iso", or "u_iso" (U = B/8π²), per atom occupant when reported. Labels: 1–8 letters, digits or _.
-- When the paper models a disordered molecule as several partially occupied atoms (split positions), prefer a "molecule" occupant if the paper itself describes molecules in a few preferred orientations; otherwise keep the split atoms as atom occupants.
-- "molecules": rigid molecules with Cartesian atom coordinates in Å in any frame of your choice (atom numbers 1, 2, 3 ... in the order listed). Take bond lengths and angles from the paper; otherwise use standard values, say which in "geometry_source", and list them in "assumptions". "anchor_atom" is the number of the atom placed on the site (or "centroid").
-- "orientation_groups": each group is one family of symmetry-equivalent orientations, all equally likely. Give:
-    "primary": a direction in the molecule ("from_atom" + "to_atom", or "from_atom" + "to_midpoint_of": [atom, atom], or "vector": [x, y, z] in your molecule frame) and the crystal direction it points along: "along": [u, v, w] (lattice direction, as in [111]) or "along_cartesian": [x, y, z] (x ∥ a, y in the ab plane).
-    "secondary" (needed unless the molecule is linear along "primary"): a second molecule direction and the crystal direction it turns towards ("towards" or "towards_cartesian"); only its part perpendicular to "primary" counts.
-    "symmetry": the point group whose operations generate the family from that one orientation, as a Schoenflies or Hermann–Mauguin symbol on standard axes (principal axis ∥ c; for cubic groups the cube axes), e.g. "Oh", "m-3m", "D4h", "-3m"; or "operations": a list such as ["C4 [0 0 1]", "C3 [1 1 1]", "-1"] ("Cn [u v w]" rotation, "m [u v w]" mirror normal, "-1" inversion, "R 30 [u v w]" rotation by degrees). Usually this is the site symmetry of the molecule's position.
-    Families with different probabilities are separate groups; their probabilities are the "occupancy" values of the molecule occupants on the site.
-- "displacements": static (frozen) Gaussian disorder used to build the model: "atom_sigma_A" per element (σ per direction, Å; from a reported U use σ = √U and mark it "derived"), "molecule_translation_sigma_A", "molecule_libration_sigma_deg".
-- "short_range_order": correlations between neighbouring occupants that the paper describes. "cell_offset" is the whole-cell offset from site_a to site_b; "tendency" is "like" (same occupants/orientations cluster) or "unlike" (they alternate); "strength" is "weak", "moderate" or "strong", or give "J_kT" (negative = like) if the paper gives an energy in units of kT.
-- "forbidden_contacts": atom pairs of different molecules or sites that the paper says must not come closer than a distance.
-- "experiment": the radiation ("xray", "neutron" or "electron") and wavelength of the paper's diffuse-scattering or PDF data.
-- Fill "not_representable" honestly: the builder handles occupational disorder, molecules in discrete orientations, static displacements and nearest-neighbour correlations; it does not handle modulated or incommensurate structures, magnetic order, anisotropic ADPs, or a continuous distribution of orientations.
-- Leave out any section the paper has nothing on (use [] or omit it). Do not invent disorder the paper does not describe.
+FIELD REFERENCE (V = a number, plain or in the long form above; V3 = a list of three numbers, plain or in the long form)
+Top level:
+- "schema": "${SCHEMA}" and "version": ${VERSION} (required, exactly these).
+- "paper": { "title", "authors", "year", "doi" } (strings; year may be a number).
+- "material": short name or formula of the phase. "conditions": temperature, pressure and sample as stated. "summary": three to five plain sentences on the average structure and the disorder.
+- "cell" (required): { "a", "b", "c" (V, Å, > 0), "alpha", "beta", "gamma" (V, degrees; 90 if omitted) }.
+- "space_group": { "symbol": Hermann–Mauguin symbol, e.g. "Fm-3m" or "P2_1/c", "number": 1–230, "source" }, or null. Use the ITA standard setting: monoclinic unique axis b, origin choice 2 where there are two origins, rhombohedral groups on hexagonal axes. If the paper uses another setting, convert the cell and coordinates to the standard setting, mark them "derived" and say so in "assumptions".
+- "sites_are": "asymmetric_unit" (one position per Wyckoff site; the program generates all equivalent positions from the space group) or "all_positions" (you list every position in the unit cell; then space_group may be null).
+- "sites" (required, at least one): list of sites, see below.
+- "molecules", "orientation_groups", "short_range_order", "forbidden_contacts": lists, see below; [] or omitted if not needed.
+- "displacements", "experiment": objects, see below; omit if not needed.
+- "assumptions", "not_representable", "questions_for_user": lists of strings.
+Site: { "label": 1–8 letters, digits or _ (unique), "frac": V3 (fractional coordinates), "occupants": list }.
+- List everything that can sit on the same position as occupants of that one site: atoms, molecules and vacancies. Occupancies of a site add up to 1; a missing remainder is read as vacancy. If the site has a single occupant, "occupancy" may be omitted (read as 1).
+- Atom occupant: { "type": "atom", "element": element symbol ("Na", "O"; write deuterium as "H" and say so in "assumptions"), "occupancy": V (0–1), and optionally "b_iso": V or "u_iso": V (Å², U = B/8π²) }.
+- Molecule occupant: { "type": "molecule", "molecule": name from "molecules", "orientation_group": name from "orientation_groups", "occupancy": V }.
+- Vacancy occupant: { "type": "vacancy", "occupancy": V }.
+- When the paper models a disordered molecule as several partially occupied atoms (split positions), use a molecule occupant if the paper itself describes molecules in a few preferred orientations; otherwise keep the split atoms as atom occupants of their own sites.
+Molecule: { "name" (unique), "atoms": list of { "element", "xyz": [x, y, z] } (Cartesian Å, any frame of your choice; atoms are numbered 1, 2, 3 ... in the order listed), "anchor_atom": the number of the atom placed on the site, or "centroid", "geometry_source": where the bond lengths and angles come from (say "standard values" if not from the paper, and list them in "assumptions") }. The molecule is rigid.
+Orientation group: one family of symmetry-equivalent orientations of one molecule, all equally likely. { "name" (unique), "molecule", "description", "source", "primary", "secondary", and "symmetry" or "operations" }.
+- "primary": a direction in the molecule, given as "from_atom" + "to_atom" (atom numbers), or "from_atom" + "to_midpoint_of": [atom, atom], or "vector": [x, y, z] in your molecule frame; plus the crystal direction it points along: "along": [u, v, w] (lattice direction, as in [111]) or "along_cartesian": [x, y, z] (x ∥ a, y in the ab plane, z completes a right-handed frame).
+- "secondary" (needed unless the molecule is linear along "primary"): a second molecule direction in the same three forms, plus the crystal direction it turns towards: "towards": [u, v, w] or "towards_cartesian": [x, y, z]. Only its part perpendicular to "primary" counts, so it must not be parallel to "primary".
+- "symmetry": the point group whose operations generate the family from that one orientation. Usually this is the site symmetry of the molecule's position. Axes are standard: the principal axis along z (∥ c); a secondary 2-fold axis or mirror normal along x (∥ a); for cubic groups the cube axes. Accepted Schoenflies symbols: ${schoenflies}. Accepted Hermann–Mauguin symbols: ${hm}.
+- Or "operations": a list of generators (the program completes the group), each one of: "Cn [u v w]" (n-fold rotation about a lattice direction, e.g. "C4 [0 0 1]"), "Sn [u v w]" (rotoreflection), "m [u v w]" (mirror with that normal), "R 30 [u v w]" (rotation by an angle in degrees), "-1" (inversion), "E" (identity), or a Jones symbol such as "-y,x,z" (translations are ignored). Write a Cartesian direction as <x y z> instead of [u v w].
+- Families with different probabilities are separate groups; their probabilities are the "occupancy" values of the molecule occupants on the site.
+Displacements (static, frozen Gaussian disorder used to build the model): { "atom_sigma_A": { element: V } (σ per Cartesian direction, Å; from a reported U use σ = √U and mark it "derived"), "molecule_translation_sigma_A": V, "molecule_libration_sigma_deg": V (rotation about a random axis) }.
+Short-range order: { "description", "site_a", "site_b" (site labels), "cell_offset": [n1, n2, n3] (whole cells from site_a's cell to site_b's cell; not [0, 0, 0] when site_a = site_b), "tendency": "like" (equal occupants or orientations cluster) or "unlike" (they alternate), "strength": "weak", "moderate" or "strong", or instead "J_kT": V (pair energy in kT when both hold the same occupant; negative favours like neighbours), "source" }.
+Forbidden contact: { "element_a", "element_b" (element symbols or "any"), "min_distance_A": V } for atoms of different molecules or sites that must not come closer than that distance.
+Experiment: { "radiation": "xray", "neutron" or "electron", "wavelength_A": V, "source" } for the paper's diffuse-scattering or PDF data.
+
+WHAT THE MODEL CAN AND CANNOT HOLD
+- It handles occupational disorder (including vacancies), rigid molecules in a discrete set of orientations, static Gaussian displacements, correlations between neighbouring occupants and minimum contact distances.
+- It does not handle modulated or incommensurate structures, magnetic order, anisotropic ADPs, flexible molecules or a continuous distribution of orientations. Put such parts of the paper's model in "not_representable" and approximate the rest.
+- Leave out any section the paper has nothing on. Do not invent disorder the paper does not describe.
 
 FORMAT EXAMPLE (structure only; the values are placeholders, not data):
 \`\`\`
