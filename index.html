@@ -3224,8 +3224,15 @@ function drawCrystal() {
 }
 
 // diffuse
-let diffuseJob = 0;
-function markDiffuseStale() { const s = $("#dstate"); if (s && !s.dataset.running) s.textContent = "Model changed: compute again to update."; }
+let diffuseJob = 0, diffuseRunning = null;
+function markDiffuseStale() {
+  // a model change makes a running preview meaningless (and its crystals a different size): stop it
+  if (diffuseRunning) {
+    diffuseJob++; diffuseRunning = null; setDiffuseButton(false);
+    const st = $("#dstate"); if (st) delete st.dataset.running;
+  }
+  const s = $("#dstate"); if (s) s.textContent = "Model changed: compute again to update.";
+}
 const PLANES = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
 function renderBenchControls() {
   const pv = S.calc.preview;
@@ -3260,7 +3267,6 @@ function planeInfo() {
   }
   return notes.join(" ");
 }
-let diffuseRunning = null;
 function setDiffuseButton(running) {
   const b = $("#dbtn"); if (!b) return;
   b.textContent = running ? "Cancel" : "Compute";
@@ -3303,6 +3309,7 @@ function runDiffuse() {
   requestAnimationFrame(step);
 }
 function magma(t) {
+  if (!isFinite(t)) t = 0;
   const st = [[0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66], [245, 125, 21], [250, 193, 39], [252, 253, 191]];
   t = Math.max(0, Math.min(1, t)) * (st.length - 1); const i = Math.min(st.length - 2, Math.floor(t)), f = t - i;
   return st[i].map((x, k) => x + (st[i + 1][k] - x) * f);
