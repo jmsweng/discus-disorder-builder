@@ -188,7 +188,7 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
       <div class="canvas-box"><canvas id="xcv"></canvas><div class="overlay">drag · shift-drag · wheel</div></div>
       <div class="fields"><span class="hint">Colour by</span>
         <button type="button" class="btn small" data-a="color" data-v="orientation">orientation</button><button type="button" class="btn small" data-a="color" data-v="element">element</button><button type="button" class="btn small" data-a="color" data-v="site">site</button>
-        <span class="hint">Cells</span><button type="button" class="btn small" data-a="cells" data-v="2">2³</button><button type="button" class="btn small" data-a="cells" data-v="3">3³</button><button type="button" class="btn small" data-a="cells" data-v="5">5³</button></div>
+        <span class="hint">Cells</span><button type="button" class="btn small" data-a="cells" data-v="1">1</button><button type="button" class="btn small" data-a="cells" data-v="2">2³</button><button type="button" class="btn small" data-a="cells" data-v="3">3³</button><button type="button" class="btn small" data-a="cells" data-v="5">5³</button></div>
       <div class="legend" id="xlegend"></div>
       <div class="stats" id="xstats"></div>
     </section>
@@ -2630,7 +2630,7 @@ const TIPS_A = {
   "tg-del": "Remove this target.", "launcher": "Fill in the usual command for this setup.", "step-commensurate": "Set the grid steps to 1/n₁, 1/n₂, 1/n₃.",
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
   "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
-  "reseed": "Draw another random crystal for the preview.", "cells": "Number of cells shown per axis.", "color": "Colour the atoms by this property.",
+  "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.",
 };
 const TIPS_ID = {

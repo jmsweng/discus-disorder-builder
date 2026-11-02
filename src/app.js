@@ -586,7 +586,7 @@ const TIPS_A = {
   "tg-del": "Remove this target.", "launcher": "Fill in the usual command for this setup.", "step-commensurate": "Set the grid steps to 1/n₁, 1/n₂, 1/n₃.",
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
   "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
-  "reseed": "Draw another random crystal for the preview.", "cells": "Number of cells shown per axis.", "color": "Colour the atoms by this property.",
+  "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.",
 };
 const TIPS_ID = {
