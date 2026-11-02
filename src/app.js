@@ -357,6 +357,7 @@ RENDER.paper = () => {
         <span class="hint">Loading replaces the model now on this page.</span></div>` : ""}</div>`;
   }
   return head("Start from a paper", "A chatbot such as Claude or ChatGPT reads the paper and writes down what it reports; this page then builds the model and shows you every value with its source, so you can check it before you use it.") + `
+  <div class="msg warn">This has only been tested to work properly with Claude Opus 5.5 and GPT-6.1 Sol. Other chatbots may give replies the page cannot read, or misread the paper.</div>
   <div class="block">${step(1, "Add your notes (optional)")}
     <p class="hint">Anything that helps read the paper correctly: which phase, temperature or pressure to use, which table holds the final refinement, what the disorder is, what you will compare with (X-ray or neutron), or where the paper is wrong or unclear. The notes go into the prompt and are kept with the model.</p>
     <textarea id="paper-notes" rows="5" placeholder="e.g. Use the 500 K, 4.7 GPa structure (Table S2), not the room-temperature one. The sample is D2O. The paper describes three orientation types of the water molecule in Fig. 3; their populations are in Extended Data Fig. 7b.">${esc(PP.notes)}</textarea></div>
