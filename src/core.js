@@ -505,6 +505,61 @@ function diffusePlaneRows(real, plane) {
   return { t, P, row };
 }
 
+// ---------------------------------------------------------------------------------- space groups
+// "x,-y+1/2,z+1/4" or "2x,x,1/4" -> { M (3×3 on x, y, z), t (translation) }
+function parseAffine(str) {
+  const parts = String(str).replace(/\s+/g, "").split(",");
+  if (parts.length !== 3) throw new Error(`"${str}" needs three comma-separated parts`);
+  const M = [], t = [];
+  parts.forEach(p => {
+    const row = [0, 0, 0]; let tr0 = 0;
+    const re = /([+-]?)(\d*\.?\d*(?:\/\d+)?)(\*?)([xyz]?)/gi;
+    let m;
+    while ((m = re.exec(p)) !== null) {
+      if (m[0] === "") { re.lastIndex++; if (re.lastIndex > p.length) break; continue; }
+      let c = m[2] === "" ? 1 : m[2].includes("/") ? Number(m[2].split("/")[0] || 1) / Number(m[2].split("/")[1]) : Number(m[2]);
+      if (!isFinite(c)) throw new Error(`cannot read "${p}"`);
+      if (m[1] === "-") c = -c;
+      if (m[4]) row["xyz".indexOf(m[4].toLowerCase())] += c; else if (m[2] !== "") tr0 += c;
+    }
+    M.push(row); t.push(tr0);
+  });
+  return { M, t };
+}
+// which of x, y, z are free in a Wyckoff representative ("x,x,1/4" -> ["x"])
+function freeParams(rep) { const { M } = parseAffine(rep); return ["x", "y", "z"].filter((v, k) => M.some(r => r[k] !== 0)); }
+// all positions in [0, 1)³ generated from a Wyckoff representative with given free parameters
+function wyckoffOrbit(sg, rep, free, tol = 1e-4) {
+  const { M, t } = parseAffine(rep), x = [+free.x || 0, +free.y || 0, +free.z || 0];
+  const p0 = [0, 1, 2].map(i => M[i][0] * x[0] + M[i][1] * x[1] + M[i][2] * x[2] + t[i]);
+  const out = [];
+  const w = v => { let r = v - Math.floor(v); if (r > 1 - tol) r = 0; return Math.abs(r) < tol ? 0 : r; };
+  for (const g of sg.g) {
+    const { M: R, t: s } = parseAffine(g);
+    const p = [0, 1, 2].map(i => w(R[i][0] * p0[0] + R[i][1] * p0[1] + R[i][2] * p0[2] + s[i]));
+    if (!out.some(q => q.every((v, i) => { const d = Math.abs(v - p[i]); return Math.min(d, 1 - d) < tol; }))) out.push(p.map(v => +v.toFixed(6)));
+  }
+  return out;
+}
+// crystal system of a space-group number and whether a cell fits it
+function crystalSystem(n) {
+  return n <= 2 ? "triclinic" : n <= 15 ? "monoclinic" : n <= 74 ? "orthorhombic" : n <= 142 ? "tetragonal" : n <= 167 ? "trigonal" : n <= 194 ? "hexagonal" : "cubic";
+}
+function fitCell(n, cell) {
+  const c = { ...cell }, sys = crystalSystem(n), r = x => +(+x).toFixed(6);
+  if (sys === "monoclinic") { c.alpha = 90; c.gamma = 90; }
+  if (sys === "orthorhombic") { c.alpha = c.beta = c.gamma = 90; }
+  if (sys === "tetragonal") { c.b = c.a; c.alpha = c.beta = c.gamma = 90; }
+  if (sys === "trigonal" || sys === "hexagonal") { c.b = c.a; c.alpha = c.beta = 90; c.gamma = 120; }
+  if (sys === "cubic") { c.b = c.c = c.a; c.alpha = c.beta = c.gamma = 90; }
+  Object.keys(c).forEach(k => { c[k] = r(c[k]); });
+  return c;
+}
+function cellFits(n, cell) {
+  const f = fitCell(n, cell);
+  return ["a", "b", "c", "alpha", "beta", "gamma"].every(k => Math.abs(+f[k] - +cell[k]) < 1e-4);
+}
+
 // ---------------------------------------------------------------------------------- plane geometry
 // Reciprocal vectors (Å⁻¹, 2π convention) of hkl directions u and v, expressed in an orthonormal basis of the
 // plane: e1 along u. Used to draw a preview plane with its true proportions and angle.
@@ -697,6 +752,6 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, realize, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, realize, parseAffine, freeParams, wyckoffOrbit, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);

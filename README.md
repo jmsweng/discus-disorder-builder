@@ -12,6 +12,8 @@ A static web page (live at https://jmsweng.github.io/discus-disorder-builder/) f
   (`C4 [0 0 1]`, `S4 [001]`, `m [1 -1 0]`, `-1`, `R 30 [1 1 1]`, Jones symbols `-y,x,z`, explicit matrices), with
   optional group closure. Placements that coincide because of the molecule's own symmetry are merged. Each
   orientation has a relative weight.
+- **Space groups**: pick any of the 230 space groups (standard settings) and a Wyckoff position; the builder adds
+  a site at every symmetry-equivalent position, with a new atom or the occupants copied from another site.
 - **Sites**: each site holds one occupant per cell (atom, molecule in one orientation of a group, or vacancy) with
   given probabilities, drawn independently or with exact composition.
 - **Disorder**: correlated occupants (composition-conserving swap Monte Carlo with pair energies along neighbour
@@ -48,6 +50,8 @@ DISCUS's non-scattering `VOID` atoms placed where the site's largest occupant wo
 - `index.html` – the whole app in one file, built by `build.py` (committed so it also opens straight from a checkout).
 - `src/` – sources: `core.js` (maths, orientations, realisation, preview, export), `viewer.js`, `app.js`,
   `examples.js`, `style.css`, `shell.html`.
+- `src/spacegroups.js` – symmetry operations and Wyckoff positions of the 230 space groups, generated with
+  [PyXtal](https://github.com/MaterSim/PyXtal) 1.1.5 (MIT licence).
 - `engine.py` – the Python template the page fills in.
 - `build.py` – inlines `src/` and `engine.py` into `index.html`. Run it after editing anything in `src/` or `engine.py`.
 - `tests/node_test.js` – Node checks of the core; writes the generated example scripts to `$OUT` (default: the temp

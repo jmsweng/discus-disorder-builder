@@ -1,7 +1,7 @@
 /* Disorder Builder UI. State lives in S; every edit goes through commit(). */
 (function () {
 "use strict";
-const DB = window.DB, EX = window.DB_EXAMPLES;
+const DB = window.DB, EX = window.DB_EXAMPLES, SG = window.DB_SG || [];
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -253,18 +253,65 @@ RENDER.sites = () => {
     return `<div class="site"><div class="site-head">${field("Label", `<input type="text" class="w-s" data-b="sites.${si}.label" data-t="str" value="${esc(s.label)}">`)}
       ${field("x y z (fractional)", trio(`sites.${si}.frac`))}${field("B (Å²)", num(`sites.${si}.b_iso`, 'class="w-s"'))}
       ${field("Draw", sel(`sites.${si}.draw`, [["random", "independent per cell"], ["exact", "exact composition"]]))}
+      ${s.set ? `<span class="tag" title="Generated from ${esc(s.wyckoff || "")}">${esc(s.wyckoff || "")}</span>` : ""}
       <span class="grow" style="flex:1"></span><button type="button" class="btn ghost" data-a="site-del" data-v="${si}">Delete site</button></div>
       <div class="probbar">${s.occupants.map((o, oi) => `<span style="width:${100 * Math.max(0, +o.p || 0) / Math.max(tot, 1)}%;background:${OCC_COLORS[oi % 8]}"></span>`).join("")}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Occupant</th><th>Species / orientation group</th><th>Probability</th><th>B override</th><th></th></tr></thead><tbody>${occ}</tbody></table></div>
       <div class="fields"><button type="button" class="btn small" data-a="occ-add" data-v="${si}.atom">+ Atom</button><button type="button" class="btn small" data-a="occ-add" data-v="${si}.molecule">+ Molecule</button>
         <button type="button" class="btn small" data-a="occ-add" data-v="${si}.vacancy">+ Vacancy</button><button type="button" class="btn small" data-a="occ-norm" data-v="${si}">Scale to 1</button>
-        <span class="sum ${Math.abs(tot - 1) > 1e-6 ? "bad" : ""}">Σp = ${fmt(tot, 4)}</span></div></div>`;
+        <span class="sum ${Math.abs(tot - 1) > 1e-6 ? "bad" : ""}">Σp = ${fmt(tot, 4)}</span>
+        ${s.set && S.sites.filter(x => x.set === s.set).length > 1 ? `<span style="flex:1"></span><button type="button" class="btn small" data-a="set-copy" data-v="${si}">Copy occupants to the other ${S.sites.filter(x => x.set === s.set).length - 1} sites of this set</button>` : ""}</div></div>`;
   }).join("");
   return head("Sites", "Each site sits at one fractional position in every unit cell. In each cell it holds one occupant, drawn with these probabilities: an atom, a molecule in one of its group's orientations, or nothing.") +
+    spaceGroupBlock() +
     `<div class="block"><h3>Sites in the unit cell <span class="grow"></span><button type="button" class="btn small" data-a="site-add">Add site</button></h3>
     <div class="cards">${cards}</div>
     <p class="hint">“Exact composition” fixes the number of each occupant in the crystal (shuffled); “independent” draws every cell separately. B is used only with Debye–Waller switched on (Calculations).</p></div>`;
 };
+
+// ---- space group → Wyckoff sites
+let wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0 };
+function spaceGroupBlock() {
+  const n = +(S.spacegroup || {}).n || 0, sg = SG.find(g => g.n === n);
+  const systems = ["triclinic", "monoclinic", "orthorhombic", "tetragonal", "trigonal", "hexagonal", "cubic"];
+  const options = systems.map(sys => `<optgroup label="${sys}">${SG.filter(g => DB.crystalSystem(g.n) === sys).map(g =>
+    `<option value="${g.n}" ${g.n === n ? "selected" : ""}>${g.n}  ${esc(g.s)}</option>`).join("")}</optgroup>`).join("");
+  let body = '<p class="hint">Pick a space group to list its Wyckoff positions. Choosing one adds every symmetry-equivalent position in the unit cell as a site.</p>';
+  if (sg) {
+    const fits = DB.cellFits(sg.n, S.cell), sys = DB.crystalSystem(sg.n);
+    const setting = sys === "monoclinic" ? "unique axis b" : sys === "trigonal" && sg.s[0] === "R" ? "hexagonal axes" : [48, 50, 59, 68, 70, 85, 86, 88, 125, 126, 129, 130, 133, 134, 137, 138, 141, 142, 201, 203, 222, 224, 227, 228].includes(sg.n) ? "origin choice 2" : "standard setting";
+    const rows = sg.w.map(w => {
+      const on = wy.letter === w[0];
+      return `<tr class="${on ? "sel" : ""}"><td class="num">${w[1]}${esc(w[0])}</td><td class="num">${esc(w[2])}</td><td class="num">${esc(w[3])}</td>
+        <td><button type="button" class="btn small" aria-pressed="${on}" data-a="wy-pick" data-v="${esc(w[0])}">${on ? "Selected" : "Choose"}</button></td></tr>`;
+    }).join("");
+    let form = "";
+    const w = sg.w.find(q => q[0] === wy.letter);
+    if (w) {
+      const fp = DB.freeParams(w[3]);
+      const pos = DB.wyckoffOrbit(sg, w[3], wy.free);
+      const clash = pos.filter(p => S.sites.some(s => s.frac.every((v, i) => { const d = Math.abs((((+v - p[i]) % 1) + 1) % 1); return Math.min(d, 1 - d) < 1e-4; })));
+      const siteOpts = S.sites.map((s, i) => `<option value="${i}" ${+wy.copy === i ? "selected" : ""}>${esc(s.label)}</option>`).join("");
+      const prefix = wy.prefix || defaultPrefix(w);
+      form = `<div class="site"><div class="fields"><strong>${w[1]}${esc(w[0])} (${esc(w[3])})</strong>
+          ${fp.length ? fp.map(v => field(v, `<input type="number" step="any" id="wy-${v}" value="${esc(wy.free[v])}" class="w-s">`)).join("") : '<span class="hint">no free parameters</span>'}
+          ${field("Label prefix", `<input type="text" id="wy-prefix" value="${esc(prefix)}" class="w-s" maxlength="7">`)}
+          ${field("Occupant", `<select id="wy-occ"><option value="atom" ${wy.occ === "atom" ? "selected" : ""}>new atom</option>${S.sites.length ? `<option value="copy" ${wy.occ === "copy" ? "selected" : ""}>copy from site</option>` : ""}</select>`)}
+          ${wy.occ === "copy" && S.sites.length ? field("Site", `<select id="wy-copy">${siteOpts}</select>`) : field("Element", `<input type="text" id="wy-el" value="${esc(wy.el)}" class="w-s">`)}
+          <button type="button" class="btn primary small" data-a="wy-add">Add ${pos.length} site${pos.length === 1 ? "" : "s"}</button></div>
+        <p class="hint num">${pos.slice(0, 12).map(p => "(" + p.map(v => fmt(v, 4)).join(", ") + ")").join("  ")}${pos.length > 12 ? `  … ${pos.length - 12} more` : ""}</p>
+        ${pos.length !== w[1] ? `<div class="msg warn">These parameter values give ${pos.length} positions instead of ${w[1]}: they put the site on a more special position.</div>` : ""}
+        ${clash.length ? `<div class="msg warn">${clash.length} of these positions already hold a site; they will be skipped.</div>` : ""}</div>`;
+    }
+    body = `<div class="fields"><span class="chip">${sys}</span><span class="hint">lattice ${esc(sg.l)}, ${setting}, ${sg.g.length} symmetry operations in the cell</span>
+        ${fits ? "" : `<span class="chip warn">cell does not match</span><button type="button" class="btn small" data-a="sg-fit">Make the cell ${sys}</button>`}</div>
+      <div class="tbl-wrap" style="max-height:280px;overflow:auto"><table class="tbl"><thead><tr><th>Wyckoff</th><th>Site symmetry</th><th>Coordinates</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${form}
+      <p class="hint">Sites made this way are ordinary sites you can edit; each carries its Wyckoff label so you can copy occupants across the set. Molecule orientations are not rotated by the symmetry operations, so give a molecule an orientation group that already has the site's symmetry (e.g. generated with “full group”).</p>`;
+  }
+  return `<div class="block"><h3>Sites from a space group</h3><div class="fields">${field("Space group", `<select id="sg-sel"><option value="0">choose…</option>${options}</select>`)}</div>${body}</div>`;
+}
+function defaultPrefix(w) { return ((wy.occ === "copy" && S.sites[+wy.copy] ? S.sites[+wy.copy].label.replace(/_?\d+$/, "") : (wy.el || "S")) + w[0]).slice(0, 7); }
 
 // ---- 5 disorder
 RENDER.disorder = () => {
@@ -587,7 +634,8 @@ const TIPS_A = {
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
   "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
-  "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
+  "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "wy-pick": "Use this Wyckoff position.", "wy-add": "Add a site at every symmetry-equivalent position (positions that already hold a site are skipped).",
+  "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
 };
 const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
@@ -596,6 +644,10 @@ const TIPS_ID = {
   "vdw-scale": "Multiply the van der Waals sums by this (e.g. 0.9 to allow slightly closer contacts).",
   "pv-n-0": "Plane by indices: all points H with h·n₁ + k·n₂ + l·n₃ = layer, i.e. the reciprocal-space plane perpendicular to the real-space direction [n₁ n₂ n₃] (for cubic cells: perpendicular to [h k l]*). (1 1 1) with layer 0 is the (111) section through the origin.",
   "pv-L": "Which parallel layer: 0 goes through the origin, 1 through the next layer of reciprocal-lattice points, fractions in between.",
+  "sg-sel": "Space group in its standard setting (monoclinic: unique axis b; origin choice 2; rhombohedral groups on hexagonal axes).",
+  "wy-x": "Free coordinate of the Wyckoff position (fraction of the cell).", "wy-y": "Free coordinate of the Wyckoff position (fraction of the cell).", "wy-z": "Free coordinate of the Wyckoff position (fraction of the cell).",
+  "wy-prefix": "New sites are labelled prefix_1, prefix_2, …", "wy-occ": "Give the new sites a single atom, or copy the occupants (atoms, molecules, vacancies) of an existing site.",
+  "wy-el": "Element of the atom placed on every new site.", "wy-copy": "Site whose occupants are copied to the new sites.",
   "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
   "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
@@ -655,6 +707,32 @@ const ACT = {
     const R = DB.expandGroup(g, mol, lattice()).orientations[+el.dataset.v].R;
     const box = $("#matbox"); box.hidden = false;
     box.textContent = `Orientation #${+el.dataset.v + 1}, Cartesian rotation matrix (applied to the molecule's coordinates):\n` + R.map(r => r.map(x => (x >= 0 ? " " : "") + x.toFixed(6)).join("  ")).join("\n") + `\ndet = ${DB.det(R).toFixed(6)}`;
+  },
+  "wy-pick": el => { wy.letter = el.dataset.v; wy.prefix = ""; renderSection(); },
+  "sg-fit": () => { S.cell = DB.fitCell(+S.spacegroup.n, S.cell); commit(); toast("Cell adjusted to the crystal system"); },
+  "wy-add": () => {
+    const sg = SG.find(g => g.n === +S.spacegroup.n), w = sg && sg.w.find(q => q[0] === wy.letter); if (!w) return;
+    const pos = DB.wyckoffOrbit(sg, w[3], wy.free);
+    const prefix = (($("#wy-prefix") || {}).value || defaultPrefix(w)).replace(/[^A-Za-z0-9_]/g, "").slice(0, 7) || "S";
+    const src = wy.occ === "copy" ? S.sites[+wy.copy] : null;
+    const el = (wy.el || "C").trim();
+    if (!src && !DB.elementOf(el)) { toast(`“${el}” is not an element symbol`); return; }
+    const setId = uid("w"), label = `${sg.n} ${sg.s} ${w[1]}${w[0]}`;
+    let added = 0, k = 0;
+    const used = new Set(S.sites.map(s => s.label));
+    pos.forEach(p => {
+      if (S.sites.some(s => s.frac.every((v, i) => { const d = Math.abs((((+v - p[i]) % 1) + 1) % 1); return Math.min(d, 1 - d) < 1e-4; }))) return;
+      let lab; do { k++; lab = `${prefix}_${k}`.slice(0, 10); } while (used.has(lab)); used.add(lab);
+      S.sites.push({ label: lab, frac: p.slice(), b_iso: src ? src.b_iso : 1, draw: src ? src.draw : "random", set: setId, wyckoff: label,
+        occupants: src ? JSON.parse(JSON.stringify(src.occupants)) : [{ type: "atom", species: el, p: 1, b: "" }] });
+      added++;
+    });
+    commit(); toast(`${added} site${added === 1 ? "" : "s"} added from ${label}`);
+  },
+  "set-copy": el => {
+    const s = S.sites[+el.dataset.v]; let n = 0;
+    S.sites.forEach(x => { if (x !== s && x.set === s.set) { x.occupants = JSON.parse(JSON.stringify(s.occupants)); x.b_iso = s.b_iso; x.draw = s.draw; n++; } });
+    commit(); toast(`Occupants copied to ${n} site${n === 1 ? "" : "s"}`);
   },
   "site-add": () => { S.sites.push({ label: "S" + (S.sites.length + 1), frac: [0, 0, 0], b_iso: 1, draw: "random", occupants: [{ type: "atom", species: "C", p: 1, b: "" }] }); commit(); },
   "site-del": el => { const i = +el.dataset.v; S.sites.splice(i, 1);
@@ -735,6 +813,15 @@ function toast(m) { let el = $("#toast"); el.textContent = m; el.hidden = false;
 document.addEventListener("change", e => {
   const el = e.target;
   if (el.id === "file-in") { importFile(el.files[0]); el.value = ""; return; }
+  if (el.id === "sg-sel") { S.spacegroup = { n: +el.value || 0 }; wy.letter = null; save(); renderSection(); return; }
+  if (/^wy-/.test(el.id)) {
+    if (/^wy-[xyz]$/.test(el.id)) wy.free[el.id.slice(3)] = +el.value || 0;
+    else if (el.id === "wy-prefix") wy.prefix = el.value;
+    else if (el.id === "wy-occ") wy.occ = el.value;
+    else if (el.id === "wy-el") wy.el = el.value.trim();
+    else if (el.id === "wy-copy") wy.copy = +el.value;
+    renderSection(); return;
+  }
   if (/^pv-(u|v|origin)-\d$/.test(el.id)) {
     const [, k, i] = /^pv-(u|v|origin)-(\d)$/.exec(el.id); const x = +el.value;
     S.calc.preview[k][+i] = isFinite(x) ? x : 0;
