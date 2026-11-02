@@ -14,10 +14,16 @@
     <h1>DISCUS Disorder Builder</h1><span class="sub">disordered crystals → discus-python script</span>
   </div>
   <div class="top-actions"><span id="status"></span>
-    <button type="button" class="btn" data-a="import">Import</button><button type="button" class="btn" data-a="export">Export model</button>
+    <button type="button" class="btn" data-a="new-model">New structure</button><button type="button" class="btn" data-a="import">Import</button><button type="button" class="btn" data-a="export">Export model</button>
     <input type="file" id="file-in" accept=".json,.py,application/json,text/x-python" hidden>
   </div>
 </header>
+<div class="confirm-bar" id="confirm-new" role="alertdialog" aria-labelledby="confirm-new-text" hidden>
+  <span id="confirm-new-text">Start a new structure? The current model is cleared from this page.</span>
+  <button type="button" class="btn small" data-a="export">Export it first</button>
+  <button type="button" class="btn small danger" data-a="new-confirm">Clear and start new</button>
+  <button type="button" class="btn small ghost" data-a="new-cancel">Cancel</button>
+</div>
 <div class="shell">
   <nav class="rail" id="rail" aria-label="Steps"></nav>
   <main class="editor" id="editor"></main>

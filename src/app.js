@@ -635,7 +635,8 @@ const TIPS_A = {
   "vec-axes": "Add vectors to the same site one cell along a, b and c.", "vec-del": "Remove this vector.", "tg-add": "Add an mmc target.",
   "tg-del": "Remove this target.", "launcher": "Fill in the usual command for this setup.", "step-commensurate": "Set the grid steps to 1/n₁, 1/n₂, 1/n₃.",
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
-  "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
+  "export": "Save the model as JSON (re-import it later).", "new-model": "Clear everything and start a new structure (asks first).",
+  "new-confirm": "Clear the current model and start from one cubic cell with a single site.", "new-cancel": "Keep the current model.", "import": "Load a model from a JSON file or a script made by this page.",
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "wy-pick": "Use this Wyckoff position.", "wy-add": "Add a site at every symmetry-equivalent position (positions that already hold a site are skipped).",
   "sym-clear": "Stop rotating molecules on this site; it then uses the orientation library as it is.", "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
@@ -671,6 +672,15 @@ function applyTips(root) {
 // ------------------------------------------------------------------------------------------ actions
 const ACT = {
   "supercell": el => { const k = +el.dataset.v; S.supercell = [k, k, k]; commit(); },
+  "new-model": () => { const b = $("#confirm-new"); b.hidden = !b.hidden; if (!b.hidden) $('[data-a="new-cancel"]').focus(); },
+  "new-cancel": () => { $("#confirm-new").hidden = true; },
+  "new-confirm": () => {
+    $("#confirm-new").hidden = true;
+    S = EX.blank.make(); S.title = "New structure";
+    molSel = undefined; grpSel = undefined; atomSel = -1; placing = false; previewSeed = 0;
+    wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0, rotate: true };
+    section = "cell"; renderRail(); commit(); window.scrollTo(0, 0); toast("New structure: one cubic cell with a single site");
+  },
   "example": el => { S = EX[el.dataset.v].make(); molSel = S.molecules[0] && S.molecules[0].id; grpSel = S.orientations[0] && S.orientations[0].id; previewSeed = 0; commit(); toast("Example loaded"); },
   "mol-add": () => { const id = uid("m"); S.molecules.push({ id, name: "New molecule", anchor: "centroid", atoms: [{ el: "C", xyz: [0, 0, 0] }] }); molSel = id; commit(); },
   "mol-select": el => { molSel = el.dataset.v; atomSel = -1; renderSection(); },

@@ -155,6 +155,10 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-family: var(--f-mono); font-size: 12.5px; }
+.confirm-bar { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  background: var(--warn-soft); color: var(--ink); border-bottom: 1px solid var(--line);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.confirm-bar span { font-weight: 600; margin-right: 6px; }
 .toast { position: fixed; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper);
   padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 20; }
 @media (max-width: 640px) { .brand .sub { display: none; } .brand h1 { font-size: 18px; } }
@@ -163,7 +167,7 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
 /* ---------------------------------------------------------------- Lattice look */
 .top { background: linear-gradient(100deg, var(--band-1), var(--band-2) 55%, var(--band-3)); color: var(--band-ink); border-bottom: 0; padding-block: 12px; }
 .top .btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .32); color: var(--band-ink); }
-.top .btn:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .6); }
+.top .btn:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .6); color: var(--band-ink); }
 .top .chip { background: #ffffff; }
 .top .chip.ok { color: #138a52; } .top .chip.warn { color: #9a5c00; } .top .chip.err { color: #c2253a; }
 .top :focus-visible { outline-color: #ffffff; }

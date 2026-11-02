@@ -169,6 +169,10 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-family: var(--f-mono); font-size: 12.5px; }
+.confirm-bar { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 64px); z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  background: var(--warn-soft); color: var(--ink); border-bottom: 1px solid var(--line);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.confirm-bar span { font-weight: 600; margin-right: 6px; }
 .toast { position: fixed; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper);
   padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 20; }
 @media (max-width: 640px) { .brand .sub { display: none; } .brand h1 { font-size: 18px; } }
@@ -177,7 +181,7 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
 /* ---------------------------------------------------------------- Lattice look */
 .top { background: linear-gradient(100deg, var(--band-1), var(--band-2) 55%, var(--band-3)); color: var(--band-ink); border-bottom: 0; padding-block: 12px; }
 .top .btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .32); color: var(--band-ink); }
-.top .btn:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .6); }
+.top .btn:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .6); color: var(--band-ink); }
 .top .chip { background: #ffffff; }
 .top .chip.ok { color: #138a52; } .top .chip.warn { color: #9a5c00; } .top .chip.err { color: #c2253a; }
 .top :focus-visible { outline-color: #ffffff; }
@@ -242,10 +246,16 @@ details > summary { cursor: pointer; color: var(--muted); }
     <h1>DISCUS Disorder Builder</h1><span class="sub">disordered crystals → discus-python script</span>
   </div>
   <div class="top-actions"><span id="status"></span>
-    <button type="button" class="btn" data-a="import">Import</button><button type="button" class="btn" data-a="export">Export model</button>
+    <button type="button" class="btn" data-a="new-model">New structure</button><button type="button" class="btn" data-a="import">Import</button><button type="button" class="btn" data-a="export">Export model</button>
     <input type="file" id="file-in" accept=".json,.py,application/json,text/x-python" hidden>
   </div>
 </header>
+<div class="confirm-bar" id="confirm-new" role="alertdialog" aria-labelledby="confirm-new-text" hidden>
+  <span id="confirm-new-text">Start a new structure? The current model is cleared from this page.</span>
+  <button type="button" class="btn small" data-a="export">Export it first</button>
+  <button type="button" class="btn small danger" data-a="new-confirm">Clear and start new</button>
+  <button type="button" class="btn small ghost" data-a="new-cancel">Cancel</button>
+</div>
 <div class="shell">
   <nav class="rail" id="rail" aria-label="Steps"></nav>
   <main class="editor" id="editor"></main>
@@ -2921,7 +2931,8 @@ const TIPS_A = {
   "vec-axes": "Add vectors to the same site one cell along a, b and c.", "vec-del": "Remove this vector.", "tg-add": "Add an mmc target.",
   "tg-del": "Remove this target.", "launcher": "Fill in the usual command for this setup.", "step-commensurate": "Set the grid steps to 1/n₁, 1/n₂, 1/n₃.",
   "dl-script": "Save the Python script.", "copy-script": "Copy the script to the clipboard.", "dl-json": "Save the model as JSON (re-import it later).",
-  "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
+  "export": "Save the model as JSON (re-import it later).", "new-model": "Clear everything and start a new structure (asks first).",
+  "new-confirm": "Clear the current model and start from one cubic cell with a single site.", "new-cancel": "Keep the current model.", "import": "Load a model from a JSON file or a script made by this page.",
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "wy-pick": "Use this Wyckoff position.", "wy-add": "Add a site at every symmetry-equivalent position (positions that already hold a site are skipped).",
   "sym-clear": "Stop rotating molecules on this site; it then uses the orientation library as it is.", "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
@@ -2957,6 +2968,15 @@ function applyTips(root) {
 // ------------------------------------------------------------------------------------------ actions
 const ACT = {
   "supercell": el => { const k = +el.dataset.v; S.supercell = [k, k, k]; commit(); },
+  "new-model": () => { const b = $("#confirm-new"); b.hidden = !b.hidden; if (!b.hidden) $('[data-a="new-cancel"]').focus(); },
+  "new-cancel": () => { $("#confirm-new").hidden = true; },
+  "new-confirm": () => {
+    $("#confirm-new").hidden = true;
+    S = EX.blank.make(); S.title = "New structure";
+    molSel = undefined; grpSel = undefined; atomSel = -1; placing = false; previewSeed = 0;
+    wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0, rotate: true };
+    section = "cell"; renderRail(); commit(); window.scrollTo(0, 0); toast("New structure: one cubic cell with a single site");
+  },
   "example": el => { S = EX[el.dataset.v].make(); molSel = S.molecules[0] && S.molecules[0].id; grpSel = S.orientations[0] && S.orientations[0].id; previewSeed = 0; commit(); toast("Example loaded"); },
   "mol-add": () => { const id = uid("m"); S.molecules.push({ id, name: "New molecule", anchor: "centroid", atoms: [{ el: "C", xyz: [0, 0, 0] }] }); molSel = id; commit(); },
   "mol-select": el => { molSel = el.dataset.v; atomSel = -1; renderSection(); },
