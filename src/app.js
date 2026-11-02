@@ -38,6 +38,7 @@ function commit({ render = true, preview = true } = {}) {
   try { validation = DB.validate(S); } catch (e) { validation = { errs: [e.message], warns: [] }; }
   renderStatus();
   const pi = $("#pinfo"); if (pi) pi.textContent = planeInfo();
+  if ($("#planes") && $("#planes").dataset.sig !== undefined) renderBenchControls();
   if (render) renderSection();
   if (preview) schedulePreview();
   markDiffuseStale();
@@ -827,7 +828,7 @@ const ACT = {
   "cells": el => { cellsShown = +el.dataset.v; drawCrystal(); $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown))); },
   "color": el => { colorMode = el.dataset.v; drawCrystal(); $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode))); },
   "diffuse": () => (diffuseRunning ? cancelDiffuse() : runDiffuse()),
-  "plane": el => { const v = el.dataset.v; const P = PLANES[v];
+  "plane": el => { const q = presetPlanes().list.find(x => x.k === el.dataset.v); if (!q) return; const P = [q.u, q.v];
     S.calc.preview.u = P[0].slice(); S.calc.preview.v = P[1].slice(); S.calc.preview.origin = [0, 0, 0]; save(); renderBenchControls(); markDiffuseStale(); },
 };
 function download(name, text, type) {
@@ -974,16 +975,70 @@ function markDiffuseStale() {
   }
   const s = $("#dstate"); if (s) s.textContent = "Model changed: compute again to update.";
 }
-const PLANES = { hk0: [[1, 0, 0], [0, 1, 0]], h0l: [[1, 0, 0], [0, 0, 1]], "0kl": [[0, 1, 0], [0, 0, 1]], hhl: [[1, 1, 0], [0, 0, 1]] };
+// Preset planes for the preview, chosen from the shape of the cell. Each plane goes through the origin.
+// hk0 / h0l / 0kl are the layers perpendicular to the real-space axes c / b / a in every cell.
+function cellSystem(c) {
+  const eq = (x, y) => Math.abs(+x - +y) < 1e-4, r90 = k => eq(c[k], 90);
+  if (eq(c.a, c.b) && eq(c.b, c.c) && r90("alpha") && r90("beta") && r90("gamma")) return "cubic";
+  if (eq(c.a, c.b) && r90("alpha") && r90("beta") && eq(c.gamma, 120)) return "hexagonal";
+  if (eq(c.a, c.b) && eq(c.b, c.c) && eq(c.alpha, c.beta) && eq(c.beta, c.gamma)) return "rhombohedral";
+  if (eq(c.a, c.b) && r90("alpha") && r90("beta") && r90("gamma")) return "tetragonal";
+  if (r90("alpha") && r90("beta") && r90("gamma")) return "orthorhombic";
+  if (r90("alpha") && r90("gamma")) return "monoclinic";
+  return "triclinic";
+}
+function presetPlanes() {
+  const sys = cellSystem(S.cell), A = lattice();
+  const zone = n => { try { const z = DB.zonePlane(A, n, 0); return [z.u, z.v]; } catch (e) { return null; } };
+  const p = (k, u, v, tip) => ({ k, u, v, tip });
+  const H = [1, 0, 0], K = [0, 1, 0], L = [0, 0, 1];
+  const base = {
+    cubic: [p("hk0", H, K, "l = 0: contains a* and b*, perpendicular to c. One of the three equivalent cube-face sections (4-fold symmetry)."),
+      p("h0l", H, L, "k = 0: contains a* and c*, perpendicular to b. Equivalent to hk0 in a cubic crystal; useful to check for lost symmetry."),
+      p("0kl", K, L, "h = 0: contains b* and c*, perpendicular to a. Equivalent to hk0 in a cubic crystal.")],
+    tetragonal: [p("hk0", H, K, "l = 0: the basal plane, contains a* and b*, perpendicular to the 4-fold axis c."),
+      p("h0l", H, L, "k = 0: contains a* and c*; a vertical plane through the 4-fold axis."),
+      p("0kl", K, L, "h = 0: contains b* and c*; equivalent to h0l in a tetragonal crystal.")],
+    hexagonal: [p("hk0", H, K, "l = 0: the basal plane, contains a* and b* (60° apart), perpendicular to c; shows the 6-fold (or 3-fold) symmetry."),
+      p("h0l", H, L, "k = 0: contains a* and c*; one of the two kinds of vertical plane through the c axis."),
+      p("0kl", K, L, "h = 0: contains b* and c*; equivalent to h0l by the hexagonal symmetry.")],
+    rhombohedral: [p("hk0", H, K, "l = 0: contains a* and b*, perpendicular to the real-space c axis of the rhombohedral cell."),
+      p("h0l", H, L, "k = 0: contains a* and c*, perpendicular to the real-space b axis."),
+      p("0kl", K, L, "h = 0: contains b* and c*, perpendicular to the real-space a axis.")],
+    orthorhombic: [p("hk0", H, K, "l = 0: contains a* and b*, perpendicular to c."),
+      p("h0l", H, L, "k = 0: contains a* and c*, perpendicular to b."),
+      p("0kl", K, L, "h = 0: contains b* and c*, perpendicular to a.")],
+    monoclinic: [p("h0l", H, L, "k = 0: contains a* and c* (at 180° − β), perpendicular to the unique axis b. The mirror plane of the monoclinic diffraction pattern."),
+      p("hk0", H, K, "l = 0: contains a* and b* (at 90°), perpendicular to the real-space c axis."),
+      p("0kl", K, L, "h = 0: contains b* and c* (at 90°), perpendicular to the real-space a axis.")],
+    triclinic: [p("hk0", H, K, "l = 0: contains a* and b*, perpendicular to the real-space c axis (not to c*)."),
+      p("h0l", H, L, "k = 0: contains a* and c*, perpendicular to the real-space b axis."),
+      p("0kl", K, L, "h = 0: contains b* and c*, perpendicular to the real-space a axis.")],
+  }[sys];
+  const extra = [];
+  if (sys === "cubic") {
+    extra.push(p("hhl", [1, 1, 0], L, "Contains [110]* and c*: the diagonal mirror plane, with the ⟨001⟩, ⟨110⟩ and ⟨111⟩ directions in one picture."));
+    const z = zone([1, 1, 1]); if (z) extra.push(p("(111)", z[0], z[1], "h + k + l = 0: the plane perpendicular to the 3-fold axis [111], containing the three ⟨1-10⟩* directions; shows 6-fold symmetry."));
+  }
+  if (sys === "tetragonal") extra.push(p("hhl", [1, 1, 0], L, "Contains [110]* and c*: the diagonal vertical mirror plane of tetragonal symmetry, at 45° to h0l."));
+  if (sys === "hexagonal") extra.push(p("hhl", [1, 1, 0], L, "Contains [110]* and c*. [110]* lies halfway between a* and b*, so this is the second kind of vertical plane through c, at 30° to h0l."));
+  if (sys === "rhombohedral") { const z = zone([1, 1, 1]); if (z) extra.push(p("(111)", z[0], z[1], "h + k + l = 0: the plane perpendicular to the 3-fold axis [111] of the rhombohedral cell.")); }
+  return { sys, list: base.concat(extra) };
+}
 function renderBenchControls() {
   const pv = S.calc.preview;
   if (!pv.origin) pv.origin = [0, 0, 0];
   const key = JSON.stringify([pv.u.map(Number), pv.v.map(Number)]), atOrigin = pv.origin.every(x => +x === 0);
-  const preset = atOrigin ? Object.keys(PLANES).find(k => JSON.stringify(PLANES[k]) === key) : null;
-  // build the buttons once and only update their state: replacing them while a field blurs would swallow the click
-  const box = $("#planes");
-  if (!box.children.length) box.innerHTML = Object.keys(PLANES).map(k => `<button type="button" class="btn small" data-a="plane" data-v="${k}">${k}</button>`).join("") +
-    `<button type="button" class="btn small" data-a="plane-custom">custom</button>`;
+  const pp = presetPlanes();
+  const preset = atOrigin ? (pp.list.find(q => JSON.stringify([q.u, q.v]) === key) || {}).k : null;
+  // rebuild the buttons only when the set of presets changes; replacing them while a field blurs would swallow the click
+  const box = $("#planes"), sig = pp.sys + ":" + pp.list.map(q => q.k).join(",");
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    box.innerHTML = pp.list.map(q => `<button type="button" class="btn small" data-a="plane" data-v="${esc(q.k)}" title="${esc(`${q.tip} u = [${q.u.join(" ")}], v = [${q.v.join(" ")}].`)}">${esc(q.k)}</button>`).join("") +
+      `<button type="button" class="btn small" data-a="plane-custom">custom</button>`;
+    box.title = `Preset planes for a ${pp.sys} cell (from the lattice parameters).`;
+  }
   $$("button", box).forEach(b => b.setAttribute("aria-pressed", String(b.dataset.a === "plane-custom" ? !preset : b.dataset.v === preset)));
   $("#pv-range").value = pv.range; $("#pv-n").value = pv.n || 8; $("#pv-d").value = pv.draws || 4;
   ["u", "v", "origin"].forEach(k => [0, 1, 2].forEach(i => { $(`#pv-${k}-${i}`).value = pv[k][i]; }));
