@@ -245,7 +245,16 @@ function orientationTable(state, A) {
   }
   return tab;
 }
-function siteClasses(site, otab) {
+// Cartesian rotation of a site's symmetry operation (rotation part of a Jones symbol), or null
+function siteRotation(site, A) {
+  if (!site.sym) return null;
+  const { M } = parseAffine(site.sym), At = tr(A);
+  const R = clean(mul(mul(At, M), inv(At)));
+  if (!isOrthogonal(R, 1e-5)) throw new Error(`site ${site.label}: the operation ${site.sym} does not fit this cell (make the cell fit the space group)`);
+  return R;
+}
+function siteClasses(site, otab, A) {
+  const SR = A ? siteRotation(site, A) : null;
   const cls = [];
   for (const o of site.occupants) {
     const p = +o.p;
@@ -259,7 +268,7 @@ function siteClasses(site, otab) {
       if (!t) continue;
       const ws = t.weights.reduce((x, y) => x + y, 0) || 1;
       t.orientations.forEach((or, k) => {
-        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}`, ...over });
+        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: SR ? clean(mul(SR, or.R)) : or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}`, ...over });
       });
     }
   }
@@ -272,7 +281,7 @@ function realize(state, opts = {}) {
   const A = latticeMatrix(state.cell);
   const otab = orientationTable(state, A);
   const rnd = rng32(opts.seed != null ? opts.seed : +state.seed || 1);
-  const classes = state.sites.map(s => siteClasses(s, otab));
+  const classes = state.sites.map(s => siteClasses(s, otab, A));
   const ncell = n[0] * n[1] * n[2];
   const idx = (x, y, z) => x + n[0] * (y + n[1] * z);
   const choice = classes.map((cl, s) => {
@@ -529,7 +538,9 @@ function parseAffine(str) {
 // which of x, y, z are free in a Wyckoff representative ("x,x,1/4" -> ["x"])
 function freeParams(rep) { const { M } = parseAffine(rep); return ["x", "y", "z"].filter((v, k) => M.some(r => r[k] !== 0)); }
 // all positions in [0, 1)³ generated from a Wyckoff representative with given free parameters
-function wyckoffOrbit(sg, rep, free, tol = 1e-4) {
+function wyckoffOrbit(sg, rep, free, tol = 1e-4) { return wyckoffOrbitOps(sg, rep, free, tol).map(q => q.p); }
+// the same positions, each with the first general-position operation that produces it from the representative
+function wyckoffOrbitOps(sg, rep, free, tol = 1e-4) {
   const { M, t } = parseAffine(rep), x = [+free.x || 0, +free.y || 0, +free.z || 0];
   const p0 = [0, 1, 2].map(i => M[i][0] * x[0] + M[i][1] * x[1] + M[i][2] * x[2] + t[i]);
   const out = [];
@@ -537,7 +548,7 @@ function wyckoffOrbit(sg, rep, free, tol = 1e-4) {
   for (const g of sg.g) {
     const { M: R, t: s } = parseAffine(g);
     const p = [0, 1, 2].map(i => w(R[i][0] * p0[0] + R[i][1] * p0[1] + R[i][2] * p0[2] + s[i]));
-    if (!out.some(q => q.every((v, i) => { const d = Math.abs(v - p[i]); return Math.min(d, 1 - d) < tol; }))) out.push(p.map(v => +v.toFixed(6)));
+    if (!out.some(q => q.p.every((v, i) => { const d = Math.abs(v - p[i]); return Math.min(d, 1 - d) < tol; }))) out.push({ p: p.map(v => +v.toFixed(6)), op: g });
   }
   return out;
 }
@@ -634,6 +645,7 @@ function validate(state) {
     m.atoms.forEach((a, i) => { if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol.`); });
   });
   const labels = new Set();
+  state.sites.forEach(s => { try { siteRotation(s, A); } catch (e) { errs.push(e.message + "."); } });
   state.sites.forEach(s => {
     if (!/^[A-Za-z0-9_]{1,10}$/.test(s.label)) errs.push(`Site label “${s.label}”: use 1–10 letters, digits or _.`);
     if (labels.has(s.label)) errs.push(`Site label “${s.label}” is used twice.`);
@@ -723,7 +735,7 @@ function buildConfig(state) {
     cell: Object.fromEntries(["a", "b", "c", "alpha", "beta", "gamma"].map(k => [k, +state.cell[k]])),
     supercell: state.supercell.map(Number), molecules, orientations,
     sites: state.sites.map(s => ({
-      label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw,
+      label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw, ...(s.sym ? { sym: s.sym } : {}),
       occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b), sigma: num(o.sigma) }
         : o.type === "molecule" ? { type: "molecule", group: o.group, p: +o.p, b: num(o.b), sigma: num(o.sigma), trans: num(o.trans), lib: num(o.lib) }
         : { type: "vacancy", p: +o.p }),
@@ -752,6 +764,6 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, realize, parseAffine, freeParams, wyckoffOrbit, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);

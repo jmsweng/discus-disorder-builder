@@ -328,7 +328,28 @@ def _mass(symbol: str) -> float:
 # ---------------------------------------------------------------------------------------------
 # occupant draw and correlated occupancies
 # ---------------------------------------------------------------------------------------------
-def occupant_classes(site: dict, orient: dict) -> list[dict]:
+def site_rotation(site: dict, A: np.ndarray) -> np.ndarray | None:
+    """Cartesian matrix of the rotation part of a site's symmetry operation (Jones symbol, e.g. "-y,x,z+1/2")."""
+    import re
+    sym = site.get("sym")
+    if not sym:
+        return None
+    M = np.zeros((3, 3))
+    parts = sym.replace(" ", "").lower().split(",")
+    if len(parts) != 3:
+        raise ValueError(f"site {site['label']}: cannot read the operation {sym!r}")
+    for i, part in enumerate(parts):
+        for sign, coef, var in re.findall(r"([+-]?)(\d*\.?\d*(?:/\d+)?)\*?([xyz])", part):
+            c = 1.0 if coef == "" else (float(coef.split("/")[0] or 1) / float(coef.split("/")[1]) if "/" in coef else float(coef))
+            M[i, "xyz".index(var)] += -c if sign == "-" else c
+    At = A.T
+    R = At @ M @ np.linalg.inv(At)
+    if not np.allclose(R @ R.T, np.eye(3), atol=1e-5):
+        raise ValueError(f"site {site['label']}: the operation {sym} does not fit this cell")
+    return R
+
+
+def occupant_classes(site: dict, orient: dict, A: np.ndarray | None = None) -> list[dict]:
     """Expand a site's occupants into choice classes: atoms, single molecule orientations, vacancies."""
     classes = []
     for occ in site["occupants"]:
@@ -346,9 +367,10 @@ def occupant_classes(site: dict, orient: dict) -> list[dict]:
             classes.append({"type": "vacancy", "p": p, "key": "vacancy"})
         elif occ["type"] == "molecule":
             mol, mats, w = orient[occ["group"]]
+            SR = site_rotation(site, A) if A is not None else None   # symmetry-equivalent site: rotate the molecule
             for k, (R, wk) in enumerate(zip(mats, w)):
                 if wk > 0:
-                    classes.append({"type": "molecule", "molecule": mol, "R": R, "p": p * wk,
+                    classes.append({"type": "molecule", "molecule": mol, "R": R if SR is None else SR @ R, "p": p * wk,
                                     "b": occ.get("b"), "key": f"mol:{occ['group']}:{k}",
                                     "group": occ["group"], "index": k, **over})
         else:
@@ -628,7 +650,7 @@ def build_structure(cfg: dict, seed: int, log):
     Ainv = np.linalg.inv(A)
     orient = orientation_table(cfg)
     mols = {name: molecule_local_coords(m) for name, m in cfg.get("molecules", {}).items()}
-    classes = [occupant_classes(site, orient) for site in cfg["sites"]]
+    classes = [occupant_classes(site, orient, A) for site in cfg["sites"]]
 
     # slots per site = largest number of atoms any occupant needs
     def n_atoms_of(c):
@@ -1402,7 +1424,16 @@ function orientationTable(state, A) {
   }
   return tab;
 }
-function siteClasses(site, otab) {
+// Cartesian rotation of a site's symmetry operation (rotation part of a Jones symbol), or null
+function siteRotation(site, A) {
+  if (!site.sym) return null;
+  const { M } = parseAffine(site.sym), At = tr(A);
+  const R = clean(mul(mul(At, M), inv(At)));
+  if (!isOrthogonal(R, 1e-5)) throw new Error(`site ${site.label}: the operation ${site.sym} does not fit this cell (make the cell fit the space group)`);
+  return R;
+}
+function siteClasses(site, otab, A) {
+  const SR = A ? siteRotation(site, A) : null;
   const cls = [];
   for (const o of site.occupants) {
     const p = +o.p;
@@ -1416,7 +1447,7 @@ function siteClasses(site, otab) {
       if (!t) continue;
       const ws = t.weights.reduce((x, y) => x + y, 0) || 1;
       t.orientations.forEach((or, k) => {
-        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}`, ...over });
+        if (t.weights[k] > 0) cls.push({ type: "molecule", group: o.group, index: k, R: SR ? clean(mul(SR, or.R)) : or.R, mol: t.mol, p: p * t.weights[k] / ws, b: o.b, key: `mol:${o.group}:${k}`, ...over });
       });
     }
   }
@@ -1429,7 +1460,7 @@ function realize(state, opts = {}) {
   const A = latticeMatrix(state.cell);
   const otab = orientationTable(state, A);
   const rnd = rng32(opts.seed != null ? opts.seed : +state.seed || 1);
-  const classes = state.sites.map(s => siteClasses(s, otab));
+  const classes = state.sites.map(s => siteClasses(s, otab, A));
   const ncell = n[0] * n[1] * n[2];
   const idx = (x, y, z) => x + n[0] * (y + n[1] * z);
   const choice = classes.map((cl, s) => {
@@ -1686,7 +1717,9 @@ function parseAffine(str) {
 // which of x, y, z are free in a Wyckoff representative ("x,x,1/4" -> ["x"])
 function freeParams(rep) { const { M } = parseAffine(rep); return ["x", "y", "z"].filter((v, k) => M.some(r => r[k] !== 0)); }
 // all positions in [0, 1)³ generated from a Wyckoff representative with given free parameters
-function wyckoffOrbit(sg, rep, free, tol = 1e-4) {
+function wyckoffOrbit(sg, rep, free, tol = 1e-4) { return wyckoffOrbitOps(sg, rep, free, tol).map(q => q.p); }
+// the same positions, each with the first general-position operation that produces it from the representative
+function wyckoffOrbitOps(sg, rep, free, tol = 1e-4) {
   const { M, t } = parseAffine(rep), x = [+free.x || 0, +free.y || 0, +free.z || 0];
   const p0 = [0, 1, 2].map(i => M[i][0] * x[0] + M[i][1] * x[1] + M[i][2] * x[2] + t[i]);
   const out = [];
@@ -1694,7 +1727,7 @@ function wyckoffOrbit(sg, rep, free, tol = 1e-4) {
   for (const g of sg.g) {
     const { M: R, t: s } = parseAffine(g);
     const p = [0, 1, 2].map(i => w(R[i][0] * p0[0] + R[i][1] * p0[1] + R[i][2] * p0[2] + s[i]));
-    if (!out.some(q => q.every((v, i) => { const d = Math.abs(v - p[i]); return Math.min(d, 1 - d) < tol; }))) out.push(p.map(v => +v.toFixed(6)));
+    if (!out.some(q => q.p.every((v, i) => { const d = Math.abs(v - p[i]); return Math.min(d, 1 - d) < tol; }))) out.push({ p: p.map(v => +v.toFixed(6)), op: g });
   }
   return out;
 }
@@ -1791,6 +1824,7 @@ function validate(state) {
     m.atoms.forEach((a, i) => { if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol.`); });
   });
   const labels = new Set();
+  state.sites.forEach(s => { try { siteRotation(s, A); } catch (e) { errs.push(e.message + "."); } });
   state.sites.forEach(s => {
     if (!/^[A-Za-z0-9_]{1,10}$/.test(s.label)) errs.push(`Site label “${s.label}”: use 1–10 letters, digits or _.`);
     if (labels.has(s.label)) errs.push(`Site label “${s.label}” is used twice.`);
@@ -1880,7 +1914,7 @@ function buildConfig(state) {
     cell: Object.fromEntries(["a", "b", "c", "alpha", "beta", "gamma"].map(k => [k, +state.cell[k]])),
     supercell: state.supercell.map(Number), molecules, orientations,
     sites: state.sites.map(s => ({
-      label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw,
+      label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw, ...(s.sym ? { sym: s.sym } : {}),
       occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b), sigma: num(o.sigma) }
         : o.type === "molecule" ? { type: "molecule", group: o.group, p: +o.p, b: num(o.b), sigma: num(o.sigma), trans: num(o.trans), lib: num(o.lib) }
         : { type: "vacancy", p: +o.p }),
@@ -1909,7 +1943,7 @@ function generateScript(state, template) {
 
 const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, realize, parseAffine, freeParams, wyckoffOrbit, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
+  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);
 
@@ -2439,7 +2473,8 @@ RENDER.sites = () => {
       ${field("x y z (fractional)", trio(`sites.${si}.frac`))}${field("B (Å²)", num(`sites.${si}.b_iso`, 'class="w-s"'))}
       ${field("Draw", sel(`sites.${si}.draw`, [["random", "independent per cell"], ["exact", "exact composition"]]))}
       ${s.set ? `<span class="tag" title="Generated from ${esc(s.wyckoff || "")}">${esc(s.wyckoff || "")}</span>` : ""}
-      <span class="grow" style="flex:1"></span><button type="button" class="btn ghost" data-a="site-del" data-v="${si}">Delete site</button></div>
+      ${s.sym ? `<span class="tag" title="Molecules on this site are turned by the rotation part of ${esc(s.sym)} relative to the orientation library.">↻ ${esc(s.sym)}</span><button type="button" class="btn ghost small" data-a="sym-clear" data-v="${si}">don't rotate</button>` : ""}
+      <span class="grow" style="flex:1"></span><button type="button" class="btn danger small" data-a="site-del" data-v="${si}">Delete site</button></div>
       <div class="probbar">${s.occupants.map((o, oi) => `<span style="width:${100 * Math.max(0, +o.p || 0) / Math.max(tot, 1)}%;background:${OCC_COLORS[oi % 8]}"></span>`).join("")}</div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Occupant</th><th>Species / orientation group</th><th>Probability</th><th>B override</th><th></th></tr></thead><tbody>${occ}</tbody></table></div>
       <div class="fields"><button type="button" class="btn small" data-a="occ-add" data-v="${si}.atom">+ Atom</button><button type="button" class="btn small" data-a="occ-add" data-v="${si}.molecule">+ Molecule</button>
@@ -2455,7 +2490,7 @@ RENDER.sites = () => {
 };
 
 // ---- space group → Wyckoff sites
-let wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0 };
+let wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0, rotate: true };
 function spaceGroupBlock() {
   const n = +(S.spacegroup || {}).n || 0, sg = SG.find(g => g.n === n);
   const systems = ["triclinic", "monoclinic", "orthorhombic", "tetragonal", "trigonal", "hexagonal", "cubic"];
@@ -2483,6 +2518,7 @@ function spaceGroupBlock() {
           ${field("Label prefix", `<input type="text" id="wy-prefix" value="${esc(prefix)}" class="w-s" maxlength="7">`)}
           ${field("Occupant", `<select id="wy-occ"><option value="atom" ${wy.occ === "atom" ? "selected" : ""}>new atom</option>${S.sites.length ? `<option value="copy" ${wy.occ === "copy" ? "selected" : ""}>copy from site</option>` : ""}</select>`)}
           ${wy.occ === "copy" && S.sites.length ? field("Site", `<select id="wy-copy">${siteOpts}</select>`) : field("Element", `<input type="text" id="wy-el" value="${esc(wy.el)}" class="w-s">`)}
+          ${wy.occ === "copy" ? `<label class="chk" title="Turn each copied molecule by the rotation (or mirror) of the symmetry operation that generates its position, as in an ordered crystal. Off: every copy keeps the original orientations."><input type="checkbox" id="wy-rot" ${wy.rotate ? "checked" : ""}> Rotate molecules with the symmetry</label>` : ""}
           <button type="button" class="btn primary small" data-a="wy-add">Add ${pos.length} site${pos.length === 1 ? "" : "s"}</button></div>
         <p class="hint num">${pos.slice(0, 12).map(p => "(" + p.map(v => fmt(v, 4)).join(", ") + ")").join("  ")}${pos.length > 12 ? `  … ${pos.length - 12} more` : ""}</p>
         ${pos.length !== w[1] ? `<div class="msg warn">These parameter values give ${pos.length} positions instead of ${w[1]}: they put the site on a more special position.</div>` : ""}
@@ -2820,7 +2856,7 @@ const TIPS_A = {
   "export": "Save the model as JSON (re-import it later).", "import": "Load a model from a JSON file or a script made by this page.",
   "reseed": "Draw another random crystal for the preview.", "cells": "Number of unit cells shown along each axis (1 = a single unit cell).", "color": "Colour the atoms by this property.",
   "diffuse": "Compute the diffuse plane in your browser.", "plane": "Reciprocal-lattice plane through the origin to compute.", "wy-pick": "Use this Wyckoff position.", "wy-add": "Add a site at every symmetry-equivalent position (positions that already hold a site are skipped).",
-  "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
+  "sym-clear": "Stop rotating molecules on this site; it then uses the orientation library as it is.", "sg-fit": "Set the lattice parameters to what this crystal system requires (keeps a, and c where it is free).", "set-copy": "Give every site generated from the same Wyckoff position these occupants, B and draw mode.", "plane-hkl": "Fill in u, v and the offset for this (h k l) plane and layer.",
 };
 const TIPS_ID = {
   "pv-range": "The plane runs from −range to +range in reciprocal lattice units.",
@@ -2832,7 +2868,7 @@ const TIPS_ID = {
   "sg-sel": "Space group in its standard setting (monoclinic: unique axis b; origin choice 2; rhombohedral groups on hexagonal axes).",
   "wy-x": "Free coordinate of the Wyckoff position (fraction of the cell).", "wy-y": "Free coordinate of the Wyckoff position (fraction of the cell).", "wy-z": "Free coordinate of the Wyckoff position (fraction of the cell).",
   "wy-prefix": "New sites are labelled prefix_1, prefix_2, …", "wy-occ": "Give the new sites a single atom, or copy the occupants (atoms, molecules, vacancies) of an existing site.",
-  "wy-el": "Element of the atom placed on every new site.", "wy-copy": "Site whose occupants are copied to the new sites.",
+  "wy-el": "Element of the atom placed on every new site.", "wy-rot": "Turn each copied molecule by the symmetry operation that generates its position.", "wy-copy": "Site whose occupants are copied to the new sites.",
   "pv-u-0": "First in-plane direction u (h k l). Plotted to the right.", "pv-v-0": "Second in-plane direction v (h k l). Plotted upwards.",
   "pv-origin-0": "Offset of the plane from the origin (h k l), e.g. 0 0 0.5 for the hk½ layer.",
   "tpl": "Replace the atoms with a template molecule.", "place-el": "Element placed by Draw atoms.", "xyz-in": "One atom per line: Element x y z (Å).",
@@ -2897,7 +2933,7 @@ const ACT = {
   "sg-fit": () => { S.cell = DB.fitCell(+S.spacegroup.n, S.cell); commit(); toast("Cell adjusted to the crystal system"); },
   "wy-add": () => {
     const sg = SG.find(g => g.n === +S.spacegroup.n), w = sg && sg.w.find(q => q[0] === wy.letter); if (!w) return;
-    const pos = DB.wyckoffOrbit(sg, w[3], wy.free);
+    const pos = DB.wyckoffOrbitOps(sg, w[3], wy.free);
     const prefix = (($("#wy-prefix") || {}).value || defaultPrefix(w)).replace(/[^A-Za-z0-9_]/g, "").slice(0, 7) || "S";
     const src = wy.occ === "copy" ? S.sites[+wy.copy] : null;
     const el = (wy.el || "C").trim();
@@ -2905,15 +2941,19 @@ const ACT = {
     const setId = uid("w"), label = `${sg.n} ${sg.s} ${w[1]}${w[0]}`;
     let added = 0, k = 0;
     const used = new Set(S.sites.map(s => s.label));
-    pos.forEach(p => {
+    const rotate = !!src && wy.rotate;
+    pos.forEach(({ p, op }) => {
       if (S.sites.some(s => s.frac.every((v, i) => { const d = Math.abs((((+v - p[i]) % 1) + 1) % 1); return Math.min(d, 1 - d) < 1e-4; }))) return;
       let lab; do { k++; lab = `${prefix}_${k}`.slice(0, 10); } while (used.has(lab)); used.add(lab);
+      const sym = rotate ? op.split(",").map(q => q.replace(/[+-]?\d+(\/\d+)?$/, "").replace(/^\+/, "") || "0").join(",") : "";
       S.sites.push({ label: lab, frac: p.slice(), b_iso: src ? src.b_iso : 1, draw: src ? src.draw : "random", set: setId, wyckoff: label,
+        ...(sym && sym !== "x,y,z" ? { sym } : {}),
         occupants: src ? JSON.parse(JSON.stringify(src.occupants)) : [{ type: "atom", species: el, p: 1, b: "" }] });
       added++;
     });
     commit(); toast(`${added} site${added === 1 ? "" : "s"} added from ${label}`);
   },
+  "sym-clear": el => { delete S.sites[+el.dataset.v].sym; commit(); toast("This site now uses the library orientations unchanged"); },
   "set-copy": el => {
     const s = S.sites[+el.dataset.v]; let n = 0;
     S.sites.forEach(x => { if (x !== s && x.set === s.set) { x.occupants = JSON.parse(JSON.stringify(s.occupants)); x.b_iso = s.b_iso; x.draw = s.draw; n++; } });
@@ -3005,6 +3045,7 @@ document.addEventListener("change", e => {
     else if (el.id === "wy-occ") wy.occ = el.value;
     else if (el.id === "wy-el") wy.el = el.value.trim();
     else if (el.id === "wy-copy") wy.copy = +el.value;
+    else if (el.id === "wy-rot") wy.rotate = el.checked;
     renderSection(); return;
   }
   if (/^pv-(u|v|origin)-\d$/.test(el.id)) {

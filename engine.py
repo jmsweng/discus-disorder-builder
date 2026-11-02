@@ -108,7 +108,28 @@ def _mass(symbol: str) -> float:
 # ---------------------------------------------------------------------------------------------
 # occupant draw and correlated occupancies
 # ---------------------------------------------------------------------------------------------
-def occupant_classes(site: dict, orient: dict) -> list[dict]:
+def site_rotation(site: dict, A: np.ndarray) -> np.ndarray | None:
+    """Cartesian matrix of the rotation part of a site's symmetry operation (Jones symbol, e.g. "-y,x,z+1/2")."""
+    import re
+    sym = site.get("sym")
+    if not sym:
+        return None
+    M = np.zeros((3, 3))
+    parts = sym.replace(" ", "").lower().split(",")
+    if len(parts) != 3:
+        raise ValueError(f"site {site['label']}: cannot read the operation {sym!r}")
+    for i, part in enumerate(parts):
+        for sign, coef, var in re.findall(r"([+-]?)(\d*\.?\d*(?:/\d+)?)\*?([xyz])", part):
+            c = 1.0 if coef == "" else (float(coef.split("/")[0] or 1) / float(coef.split("/")[1]) if "/" in coef else float(coef))
+            M[i, "xyz".index(var)] += -c if sign == "-" else c
+    At = A.T
+    R = At @ M @ np.linalg.inv(At)
+    if not np.allclose(R @ R.T, np.eye(3), atol=1e-5):
+        raise ValueError(f"site {site['label']}: the operation {sym} does not fit this cell")
+    return R
+
+
+def occupant_classes(site: dict, orient: dict, A: np.ndarray | None = None) -> list[dict]:
     """Expand a site's occupants into choice classes: atoms, single molecule orientations, vacancies."""
     classes = []
     for occ in site["occupants"]:
@@ -126,9 +147,10 @@ def occupant_classes(site: dict, orient: dict) -> list[dict]:
             classes.append({"type": "vacancy", "p": p, "key": "vacancy"})
         elif occ["type"] == "molecule":
             mol, mats, w = orient[occ["group"]]
+            SR = site_rotation(site, A) if A is not None else None   # symmetry-equivalent site: rotate the molecule
             for k, (R, wk) in enumerate(zip(mats, w)):
                 if wk > 0:
-                    classes.append({"type": "molecule", "molecule": mol, "R": R, "p": p * wk,
+                    classes.append({"type": "molecule", "molecule": mol, "R": R if SR is None else SR @ R, "p": p * wk,
                                     "b": occ.get("b"), "key": f"mol:{occ['group']}:{k}",
                                     "group": occ["group"], "index": k, **over})
         else:
@@ -408,7 +430,7 @@ def build_structure(cfg: dict, seed: int, log):
     Ainv = np.linalg.inv(A)
     orient = orientation_table(cfg)
     mols = {name: molecule_local_coords(m) for name, m in cfg.get("molecules", {}).items()}
-    classes = [occupant_classes(site, orient) for site in cfg["sites"]]
+    classes = [occupant_classes(site, orient, A) for site in cfg["sites"]]
 
     # slots per site = largest number of atoms any occupant needs
     def n_atoms_of(c):
