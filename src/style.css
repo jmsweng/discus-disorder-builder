@@ -32,7 +32,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
 .brand h1 { font-family: var(--f-display); font-weight: 600; font-size: 20px; letter-spacing: .01em; margin: 0; }
 .brand .sub { color: var(--muted); font-size: 12.5px; }
-.brand .lattice-mark { width: 22px; height: 22px; flex: none; align-self: center; }
+.brand .lattice-mark { width: 28px; height: 28px; flex: none; align-self: center; }
 .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 .shell { display: grid; grid-template-columns: 188px minmax(0, 1fr) minmax(320px, 430px); gap: 18px; align-items: start;
