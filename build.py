@@ -7,7 +7,7 @@ src = root / "src"
 engine = (root / "engine.py").read_text(encoding="utf-8")
 assert "</script" not in engine.lower()
 body = (src / "shell.html").read_text(encoding="utf-8")
-parts = {"/*STYLE*/": src / "style.css", "/*CORE*/": src / "core.js", "/*EXAMPLES*/": src / "examples.js", "/*SG*/": src / "spacegroups.js",
+parts = {"/*STYLE*/": src / "style.css", "/*CORE*/": src / "core.js", "/*EXAMPLES*/": src / "examples.js", "/*SG*/": src / "spacegroups.js", "/*PAPER*/": src / "paper.js",
          "/*VIEWER*/": src / "viewer.js", "/*APP*/": src / "app.js"}
 for k, p in parts.items():
     t = p.read_text(encoding="utf-8")

@@ -1,0 +1,32 @@
+{
+  "schema": "disorder-builder-paper-extract", "version": 1,
+  "paper": { "title": "Observation of plastic ice VII by quasi-elastic neutron scattering", "authors": "Rescigno et al.", "year": 2025, "doi": "10.1038/s41586-025-08750-0" },
+  "material": "plastic ice VII (D2O)",
+  "conditions": "500 K, 4.7 GPa",
+  "summary": "Body-centred cubic oxygen lattice; water molecules rotate between three families of orientations.",
+  "cell": { "a": { "value": 3.30, "source": "D20 diffraction, Methods", "status": "reported" },
+            "b": { "value": 3.30, "source": "cubic", "status": "derived" }, "c": { "value": 3.30, "source": "cubic", "status": "derived" },
+            "alpha": 90, "beta": 90, "gamma": 90 },
+  "space_group": { "symbol": "Im-3m", "number": 229, "source": "p. 2" },
+  "sites_are": "asymmetric_unit",
+  "sites": [ { "label": "W", "frac": { "value": [0, 0, 0], "source": "Table 1", "status": "reported" }, "occupants": [
+      { "type": "molecule", "molecule": "water", "orientation_group": "S", "occupancy": { "value": 0.737, "source": "Ext. Data Fig. 7b", "status": "derived" } },
+      { "type": "molecule", "molecule": "water", "orientation_group": "E", "occupancy": { "value": 0.248, "source": "Ext. Data Fig. 7b", "status": "derived" } },
+      { "type": "molecule", "molecule": "water", "orientation_group": "D", "occupancy": { "value": 0.015, "source": "Ext. Data Fig. 7b", "status": "derived" } } ] } ],
+  "molecules": [ { "name": "water", "anchor_atom": 1, "geometry_source": "TIP4P/2005, Methods", "atoms": [
+      { "element": "O", "xyz": [0, 0, 0] }, { "element": "H", "xyz": [0.75695, 0.58588, 0] }, { "element": "H", "xyz": [-0.75695, 0.58588, 0] } ] } ],
+  "orientation_groups": [
+    { "name": "S", "molecule": "water", "description": "H towards two cube corners on one face diagonal", "source": "Fig. 3",
+      "primary": { "from_atom": 1, "to_midpoint_of": [2, 3], "along": [0, 0, 1] }, "secondary": { "from_atom": 2, "to_atom": 3, "towards": [1, 1, 0] }, "symmetry": "Oh" },
+    { "name": "E", "molecule": "water", "description": "H towards two corners sharing an edge", "source": "Fig. 3",
+      "primary": { "from_atom": 1, "to_midpoint_of": [2, 3], "along": [0, 1, 1] }, "secondary": { "from_atom": 2, "to_atom": 3, "towards": [1, 0, 0] }, "symmetry": "Oh" },
+    { "name": "D", "molecule": "water", "description": "H–H along a body diagonal", "source": "Fig. 3",
+      "primary": { "from_atom": 2, "to_atom": 3, "along": [1, 1, 1] }, "secondary": { "from_atom": 1, "to_midpoint_of": [2, 3], "towards": [1, -1, 0] }, "symmetry": "m-3m" } ],
+  "displacements": { "molecule_libration_sigma_deg": { "value": 12, "source": "chosen below the QENS value", "status": "assumed" },
+                     "atom_sigma_A": { "O": 0.08 } },
+  "forbidden_contacts": [ { "element_a": "H", "element_b": "H", "min_distance_A": { "value": 1.5, "source": "Methods", "status": "reported" } } ],
+  "experiment": { "radiation": "neutron", "wavelength_A": { "value": 0.71, "source": "Methods", "status": "reported" } },
+  "assumptions": ["Weights are the Markov-chain equilibrium populations."],
+  "not_representable": ["Continuous rotational diffusion between orientations."],
+  "questions_for_user": []
+}

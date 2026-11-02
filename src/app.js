@@ -1,7 +1,7 @@
 /* Disorder Builder UI. State lives in S; every edit goes through commit(). */
 (function () {
 "use strict";
-const DB = window.DB, EX = window.DB_EXAMPLES, SG = window.DB_SG || [];
+const DB = window.DB, EX = window.DB_EXAMPLES, SG = window.DB_SG || [], PAPER = window.DB_PAPER;
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -16,6 +16,11 @@ if (!S) S = EX.rotor.make();
 let section = "cell", molSel = S.molecules[0] && S.molecules[0].id, grpSel = S.orientations[0] && S.orientations[0].id;
 let previewSeed = 0, placing = false, placeEl = "C", atomSel = -1, colorMode = "orientation", cellsShown = 3;
 let lastReal = null;
+// "From a paper": the user's notes, the pasted reply and its reading (kept separately from the model)
+const PSTORE = STORE + "-paper";
+let PP = { notes: "", reply: "", result: null };
+try { const raw = localStorage.getItem(PSTORE); if (raw) { const o = JSON.parse(raw); PP.notes = o.notes || ""; PP.reply = o.reply || ""; } } catch (e) { /* storage unavailable */ }
+function savePaper() { try { localStorage.setItem(PSTORE, JSON.stringify({ notes: PP.notes, reply: PP.reply })); } catch (e) { /* storage unavailable */ } }
 
 function upgrade(s) {
   const b = EX.blank.make();
@@ -100,7 +105,7 @@ const AFTER = {};
 RENDER.cell = () => {
   const A = lattice(), n = S.supercell.map(Number);
   const V = A ? DB.det(A) : NaN;
-  return head("Unit cell and crystal", "The cell uses the discus-python convention: a along x, b in the xy plane. All positions are fractions of this cell; the crystal is the cell repeated n₁ × n₂ × n₃ times.") + `
+  return head("Unit cell and crystal", "The cell uses the discus-python convention: a along x, b in the xy plane. All positions are fractions of this cell; the crystal is the cell repeated n₁ × n₂ × n₃ times.") + paperBlock() + `
   <div class="block"><h3>Model</h3><div class="fields">
     ${field("Title", txt("title", 'class="w-xl"'))}${field("Random seed", num("seed", 'step="1"'))}${field("Output folder", txt("output_dir", 'class="w-l"'))}</div></div>
   <div class="block"><h3>Lattice parameters</h3><div class="fields">
@@ -319,6 +324,54 @@ function spaceGroupBlock() {
   return `<div class="block"><h3>Sites from a space group</h3><div class="fields">${field("Space group", `<select id="sg-sel"><option value="0">choose…</option>${options}</select>`)}</div>${body}</div>`;
 }
 function defaultPrefix(w) { return ((wy.occ === "copy" && S.sites[+wy.copy] ? S.sites[+wy.copy].label.replace(/_?\d+$/, "") : (wy.el || "S")) + w[0]).slice(0, 7); }
+
+// ---- source paper (Cell step) and "From a paper"
+function paperBlock() {
+  const p = S.paper;
+  if (!p || !(p.title || p.doi || p.summary)) return `<p class="hint">Starting from a published structure? <button type="button" class="btn small" data-a="paper-open">Start from a paper</button></p>`;
+  const cite = [p.authors, p.year && `(${esc(p.year)})`].filter(Boolean).map(String).join(" ");
+  const list = (t, xs) => xs && xs.length ? `<p class="hint"><strong>${t}</strong></p><ul class="plist">${xs.map(q => `<li>${esc(q)}</li>`).join("")}</ul>` : "";
+  return `<div class="block"><h3>Source paper</h3>
+    <p>${esc(cite)}${cite ? ", " : ""}<em>${esc(p.title)}</em>${p.doi ? ` · <a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener">doi:${esc(p.doi)}</a>` : ""}</p>
+    ${p.conditions ? `<p class="hint">${esc(p.conditions)}</p>` : ""}${p.summary ? `<p>${esc(p.summary)}</p>` : ""}
+    ${p.notes ? `<p class="hint"><strong>Your notes</strong></p><p class="pnotes">${esc(p.notes)}</p>` : ""}
+    ${list("Assumptions made when reading the paper", p.assumptions)}${list("Not represented in this model", p.not_representable)}${list("Open questions", p.questions)}</div>`;
+}
+const STATUS_TXT = { unsourced: "no source", assumed: "assumed", default: "page default", derived: "derived", user: "your note", reported: "reported" };
+RENDER.paper = () => {
+  const r = PP.result;
+  const step = (k, t) => `<h3><span class="pstep">${k}</span>${t}</h3>`;
+  let res = "";
+  if (r) {
+    const warnRows = r.review.filter(q => q.status !== "reported").length;
+    res = `<div class="block">${step(4, "Check what was read")}
+      ${r.errors.length ? `${msgs(r.errors, "err")}<div class="fields"><button type="button" class="btn primary small" data-a="paper-fix">Copy a message for the chatbot</button>
+        <span class="hint">Paste it into the same chat; the chatbot answers with a corrected JSON, which you paste in step 3 again.</span></div>` : ""}
+      ${msgs(r.warnings, "warn")}
+      ${r.review.length ? `<p class="hint">${r.review.length} values were read; ${warnRows} of them are not reported by the paper (no source, assumed, derived or page defaults) and are listed first. Compare them with the paper before you rely on the model.</p>
+      <div class="tbl-wrap" style="max-height:420px;overflow:auto"><table class="tbl ptbl"><thead><tr><th>What</th><th>Value</th><th>Status</th><th>Source</th></tr></thead><tbody>
+      ${r.review.map(q => `<tr class="ps-${q.status}"><td>${esc(q.label)}${q.note ? `<div class="hint">${esc(q.note)}</div>` : ""}</td><td class="num">${esc(q.value)}</td>
+        <td><span class="chip ps">${esc(STATUS_TXT[q.status] || q.status)}</span></td><td>${esc(q.source)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${r.state ? `<div class="fields"><button type="button" class="btn primary" data-a="paper-load">Load this model</button>
+        <button type="button" class="btn small" data-a="export">Save the current model first</button>
+        <span class="hint">Loading replaces the model now on this page.</span></div>` : ""}</div>`;
+  }
+  return head("Start from a paper", "A chatbot such as Claude or ChatGPT reads the paper and writes down what it reports; this page then builds the model and shows you every value with its source, so you can check it before you use it.") + `
+  <div class="block">${step(1, "Add your notes (optional)")}
+    <p class="hint">Anything that helps read the paper correctly: which phase, temperature or pressure to use, which table holds the final refinement, what the disorder is, what you will compare with (X-ray or neutron), or where the paper is wrong or unclear. The notes go into the prompt and are kept with the model.</p>
+    <textarea id="paper-notes" rows="5" placeholder="e.g. Use the 500 K, 4.7 GPa structure (Table S2), not the room-temperature one. The sample is D2O. The paper describes three orientation types of the water molecule in Fig. 3; their populations are in Extended Data Fig. 7b.">${esc(PP.notes)}</textarea></div>
+  <div class="block">${step(2, "Copy the prompt and give it to a chatbot with the paper")}
+    <ol class="psteps"><li>Open Claude, ChatGPT or a similar assistant that can read PDF files, in a new chat.</li>
+      <li>Attach the paper's PDF, and its supplementary information and CIF files if you have them.</li>
+      <li>Paste the prompt and send it. The answer ends with a block of JSON.</li></ol>
+    <div class="fields"><button type="button" class="btn primary" data-a="paper-copy">Copy the prompt</button><button type="button" class="btn" data-a="paper-dl">Download it as a text file</button></div>
+    <details><summary>Show the prompt</summary><pre class="code" id="paper-prompt">${esc(PAPER.buildPrompt(PP.notes))}</pre></details></div>
+  <div class="block">${step(3, "Paste the chatbot's whole answer")}
+    <textarea id="paper-reply" rows="8" placeholder="Paste the complete answer here, including the JSON block.">${esc(PP.reply)}</textarea>
+    <div class="fields"><button type="button" class="btn primary" data-a="paper-read">Read the answer</button>${PP.reply ? '<button type="button" class="btn small ghost" data-a="paper-clear">Clear</button>' : ""}</div></div>
+  ${res}
+  <p class="hint">Chatbots make mistakes. The page checks that the model is complete and self-consistent, but only you can check it against the paper: look at every row that is not marked “reported”, and at the crystal preview.</p>`;
+};
 
 // ---- 5 disorder
 RENDER.disorder = () => {
@@ -824,6 +877,25 @@ const ACT = {
   "dl-json": () => download(`${fileBase()}.json`, JSON.stringify({ schema: "discuspdf-disorder-builder-state", version: 1, state: S }, null, 1), "application/json"),
   "export": () => ACT["dl-json"](),
   "import": () => $("#file-in").click(),
+  "paper-open": () => { section = "paper"; placing = false; renderRail(); renderSection(); window.scrollTo(0, 0); },
+  "paper-copy": () => copyText(PAPER.buildPrompt(PP.notes), "Prompt copied", "#paper-prompt"),
+  "paper-dl": () => download("disorder_builder_prompt.txt", PAPER.buildPrompt(PP.notes), "text/plain"),
+  "paper-read": () => {
+    PP.reply = ($("#paper-reply") || {}).value || PP.reply; savePaper();
+    const ex = PAPER.extractJson(PP.reply);
+    PP.result = ex.json ? PAPER.fromPaper(ex.json) : { errors: [ex.error], warnings: [], review: [], state: null };
+    renderSection();
+    const box = $(".ptbl") || $("#editor .msg"); if (box) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  },
+  "paper-fix": () => copyText(PAPER.fixMessage(PP.result.errors), "Message copied: paste it into the chat"),
+  "paper-clear": () => { PP.reply = ""; PP.result = null; savePaper(); renderSection(); },
+  "paper-load": () => {
+    const r = PP.result; if (!r || !r.state) return;
+    S = upgrade(JSON.parse(JSON.stringify(r.state))); S.paper.notes = PP.notes.trim();
+    molSel = S.molecules[0] && S.molecules[0].id; grpSel = S.orientations[0] && S.orientations[0].id; previewSeed = 0; atomSel = -1;
+    wy = { letter: null, free: { x: 0.1, y: 0.2, z: 0.3 }, prefix: "", occ: "atom", el: "C", copy: 0, rotate: true };
+    section = "cell"; renderRail(); commit(); window.scrollTo(0, 0); toast("Model loaded from the paper: check each step");
+  },
   "reseed": () => { previewSeed++; updatePreview(); },
   "cells": el => { cellsShown = +el.dataset.v; drawCrystal(); $$('[data-a="cells"]').forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === cellsShown))); },
   "color": el => { colorMode = el.dataset.v; drawCrystal(); $$('[data-a="color"]').forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === colorMode))); },
@@ -839,9 +911,12 @@ function download(name, text, type) {
     toast(`Downloading ${name}. If nothing arrives, use Copy instead.`);
   } catch (e) { toast("Download blocked here; use Copy instead"); }
 }
-function copyText(t) {
-  const fallback = () => { const box = $("#code"); if (box) { const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Selected: press Ctrl/⌘+C to copy"); };
-  try { navigator.clipboard.writeText(t).then(() => toast("Script copied"), fallback); } catch (e) { fallback(); }
+function copyText(t, done = "Script copied", boxSel = "#code") {
+  const fallback = () => {
+    const box = $(boxSel); if (box) { const d = box.closest("details"); if (d) d.open = true; const r = document.createRange(); r.selectNodeContents(box); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    toast(box ? "Selected: press Ctrl/⌘+C to copy" : "Copy is blocked here; use the download instead");
+  };
+  try { navigator.clipboard.writeText(t).then(() => toast(done), fallback); } catch (e) { fallback(); }
 }
 let toastT;
 function toast(m) { let el = $("#toast"); el.textContent = m; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 2600); }
@@ -886,6 +961,11 @@ document.addEventListener("change", e => {
     const g = S.orientations.find(x => x.id === grpSel); if (g && /orientations\.\d+\.(ops|closure|frame|molecule)$/.test(path)) g.weights = [];
   }
   commit();
+});
+document.addEventListener("input", e => {
+  const el = e.target;
+  if (el.id === "paper-notes") { PP.notes = el.value; savePaper(); const pr = $("#paper-prompt"); if (pr) pr.textContent = PAPER.buildPrompt(PP.notes); }
+  else if (el.id === "paper-reply") { PP.reply = el.value; savePaper(); }
 });
 document.addEventListener("click", e => {
   const s = e.target.closest("[data-sec]");
