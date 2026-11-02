@@ -77,6 +77,9 @@ label.chk { display: inline-flex; gap: 6px; align-items: center; cursor: pointer
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 500; }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 3px 6px; }
 .btn.ghost:hover { color: var(--err); }
+.btn.danger { color: var(--err); }
+.btn.danger:hover { border-color: var(--err); background: var(--err-soft); }
+.fields .push { flex: 1 1 0; min-width: 12px; }
 .btn.small { padding: 2px 8px; font-size: 12.5px; }
 .btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
 

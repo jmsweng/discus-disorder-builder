@@ -134,7 +134,7 @@ RENDER.molecules = () => {
     body = `<div class="fields">${field("Name", txt(`molecules.${mi}.name`, 'class="w-l"'))}
       ${field("Placed at the site by", sel(`molecules.${mi}.anchor`, [["centroid", "centroid"], ["com", "centre of mass"], ...m.atoms.map((a, i) => [i, `atom ${i + 1} (${a.el})`])]))}
       ${field("Template", `<select id="tpl"><option value="">Replace atoms with…</option>${Object.keys(TEMPLATES).map(k => `<option>${k}</option>`).join("")}</select>`)}
-      <button type="button" class="btn" data-a="mol-dup">Duplicate</button><button type="button" class="btn ghost" data-a="mol-del">Delete molecule</button></div>
+      <button type="button" class="btn" data-a="mol-dup">Duplicate</button><span class="push"></span><button type="button" class="btn danger" data-a="mol-del">Delete molecule</button></div>
     <div class="mol-layout">
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Element</th><th>x (Å)</th><th>y (Å)</th><th>z (Å)</th><th></th></tr></thead><tbody>
       ${m.atoms.map((a, i) => `<tr class="${i === atomSel ? "sel" : ""}"><td class="num"><button type="button" class="btn ghost small" data-a="atom-pick" data-v="${i}">${i + 1}</button></td>
@@ -201,7 +201,7 @@ RENDER.orientations = () => {
     const wsum = ex.orientations.reduce((s, o, k) => s + (+w(k) || 0), 0) || 1;
     body = `<div class="fields">${field("Name", txt(`orientations.${gi}.name`, 'class="w-l"'))}
         ${field("Molecule", sel(`orientations.${gi}.molecule`, S.molecules.map(m => [m.id, m.name])))}
-        <button type="button" class="btn" data-a="grp-dup">Duplicate</button><button type="button" class="btn ghost" data-a="grp-del">Delete group</button></div>
+        <button type="button" class="btn" data-a="grp-dup">Duplicate</button><span class="push"></span><button type="button" class="btn danger" data-a="grp-del">Delete group</button></div>
       <div class="fields">${field("Euler convention", sel(`orientations.${gi}.convention`, [["ZYZ", "ZYZ"], ["ZXZ", "ZXZ"], ["XYZ", "XYZ"]]))}
         ${field("α β γ (°) — base orientation", trio(`orientations.${gi}.euler`))}
         ${field("Operations act in", sel(`orientations.${gi}.frame`, [["lab", "crystal frame (after the base)"], ["molecule", "molecule frame (before the base)"]]))}
