@@ -965,7 +965,7 @@ function planeInfo() {
     if (!f.enabled) notes.push(`Same cut as the ${hkl[k]} = ${fmt(o[k], 4)} slice of a 3D grid (3D diffuse is switched off).`);
     else if (!isInt(idx)) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is not on the DISCUS grid (step ${fmt(step, 4)} along ${hkl[k]}).`);
     else if (Math.abs(idx) > half) notes.push(`${hkl[k]} = ${fmt(o[k], 4)} is outside the DISCUS grid (±${fmt(+f.hmax[k], 3)}).`);
-    else notes.push(`Same cut as the DISCUS slice ${hkl[k]} = ${fmt(o[k], 4)}: index ${Math.round(idx) + half} along array axis ${k} of diffuse.npz.`);
+    else notes.push(`Same cut as the ${hkl[k]} = ${fmt(o[k], 4)} slice of the 3D diffuse volume from DISCUS (index ${Math.round(idx) + half} of ${2 * half + 1} along its ${hkl[k]} axis).`);
   }
   return notes.join(" ");
 }
