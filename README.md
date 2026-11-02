@@ -6,7 +6,8 @@ A static web page (live at https://jmsweng.github.io/discus-disorder-builder/) f
 ## What it does
 
 - **Start from a paper** ("From a paper" in the header): the page gives you a prompt to paste, together with the
-  paper's PDF (and SI/CIF), into Claude, ChatGPT or a similar assistant, with an optional box for your own notes
+  paper's PDF (and SI/CIF), into Claude, ChatGPT or a similar assistant (or to download as
+  `disorder_builder_prompt.md` and attach to the chat instead of pasting), with an optional box for your own notes
   (phase, table to use, what the disorder is …), which go into the prompt. The chatbot only transcribes what the paper
   reports, as a small JSON format in which every number can carry its source and a status (reported / derived /
   assumed / your note). You paste the answer back; the page expands the space-group symmetry, computes the

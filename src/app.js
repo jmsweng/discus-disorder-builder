@@ -17,7 +17,7 @@ let section = "cell", molSel = S.molecules[0] && S.molecules[0].id, grpSel = S.o
 let previewSeed = 0, placing = false, placeEl = "C", atomSel = -1, colorMode = "orientation", cellsShown = 3;
 let lastReal = null;
 // "From a paper": the user's notes, the pasted reply and its reading (kept separately from the model)
-const PSTORE = STORE + "-paper";
+const PSTORE = STORE + "-paper", PROMPT_FILE = "disorder_builder_prompt.md";
 let PP = { notes: "", reply: "", result: null };
 try { const raw = localStorage.getItem(PSTORE); if (raw) { const o = JSON.parse(raw); PP.notes = o.notes || ""; PP.reply = o.reply || ""; } } catch (e) { /* storage unavailable */ }
 function savePaper() { try { localStorage.setItem(PSTORE, JSON.stringify({ notes: PP.notes, reply: PP.reply })); } catch (e) { /* storage unavailable */ } }
@@ -360,11 +360,20 @@ RENDER.paper = () => {
   <div class="block">${step(1, "Add your notes (optional)")}
     <p class="hint">Anything that helps read the paper correctly: which phase, temperature or pressure to use, which table holds the final refinement, what the disorder is, what you will compare with (X-ray or neutron), or where the paper is wrong or unclear. The notes go into the prompt and are kept with the model.</p>
     <textarea id="paper-notes" rows="5" placeholder="e.g. Use the 500 K, 4.7 GPa structure (Table S2), not the room-temperature one. The sample is D2O. The paper describes three orientation types of the water molecule in Fig. 3; their populations are in Extended Data Fig. 7b.">${esc(PP.notes)}</textarea></div>
-  <div class="block">${step(2, "Copy the prompt and give it to a chatbot with the paper")}
-    <ol class="psteps"><li>Open Claude, ChatGPT or a similar assistant that can read PDF files, in a new chat.</li>
-      <li>Attach the paper's PDF, and its supplementary information and CIF files if you have them.</li>
-      <li>Paste the prompt and send it. The answer ends with a block of JSON.</li></ol>
-    <div class="fields"><button type="button" class="btn primary" data-a="paper-copy">Copy the prompt</button><button type="button" class="btn" data-a="paper-dl">Download it as a text file</button></div>
+  <div class="block">${step(2, "Give the prompt to a chatbot together with the paper")}
+    <p class="hint">Open Claude, ChatGPT or a similar assistant that can read PDF files, in a new chat. Then use either way:</p>
+    <div class="pways">
+      <div class="pway"><h4>A · Copy and paste</h4>
+        <ol class="psteps"><li>Click <strong>Copy the prompt</strong>.</li>
+          <li>Attach the paper's PDF, and its supplementary information and CIF files if you have them.</li>
+          <li>Paste the prompt into the message box and send it.</li></ol>
+        <button type="button" class="btn primary" data-a="paper-copy">Copy the prompt</button></div>
+      <div class="pway"><h4>B · Attach the prompt as a file</h4>
+        <ol class="psteps"><li>Click <strong>Download prompt (.md)</strong> and save the file.</li>
+          <li>Attach the saved <code>${esc(PROMPT_FILE)}</code> together with the paper's PDF (and SI or CIF files).</li>
+          <li>Type a short message such as <em>“Follow the instructions in ${esc(PROMPT_FILE)} for the attached paper.”</em> and send it.</li></ol>
+        <button type="button" class="btn" data-a="paper-dl">Download prompt (.md)</button></div></div>
+    <p class="hint">Either way the answer ends with a block of JSON. The file holds your notes from step 1 as they were when you downloaded it: download it again after changing the notes. You can keep the file and reuse it for other papers if the notes still fit.</p>
     <details><summary>Show the prompt</summary><pre class="code" id="paper-prompt">${esc(PAPER.buildPrompt(PP.notes))}</pre></details></div>
   <div class="block">${step(3, "Paste the chatbot's whole answer")}
     <textarea id="paper-reply" rows="8" placeholder="Paste the complete answer here, including the JSON block.">${esc(PP.reply)}</textarea>
@@ -879,7 +888,7 @@ const ACT = {
   "import": () => $("#file-in").click(),
   "paper-open": () => { section = "paper"; placing = false; renderRail(); renderSection(); window.scrollTo(0, 0); },
   "paper-copy": () => copyText(PAPER.buildPrompt(PP.notes), "Prompt copied", "#paper-prompt"),
-  "paper-dl": () => download("disorder_builder_prompt.txt", PAPER.buildPrompt(PP.notes), "text/plain"),
+  "paper-dl": () => download(PROMPT_FILE, PAPER.promptMarkdown(PP.notes), "text/markdown"),
   "paper-read": () => {
     PP.reply = ($("#paper-reply") || {}).value || PP.reply; savePaper();
     const ex = PAPER.extractJson(PP.reply);

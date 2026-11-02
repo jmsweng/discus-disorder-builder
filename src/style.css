@@ -234,3 +234,7 @@ ul.plist { margin: 2px 0 8px 18px; padding: 0; font-size: 13px; }
 .ptbl tr.ps-unsourced .chip, .ptbl tr.ps-assumed .chip { color: var(--warn); border-color: currentColor; }
 .ptbl tr.ps-unsourced td:first-child, .ptbl tr.ps-assumed td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 .ptbl tr.ps-default .chip, .ptbl tr.ps-derived .chip { color: var(--muted); }
+.pways { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 6px 0; }
+.pway { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.pway h4 { margin: 0 0 4px; font-size: 13.5px; }
+.pway ol.psteps { margin-bottom: 8px; }

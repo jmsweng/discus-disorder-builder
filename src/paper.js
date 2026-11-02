@@ -145,6 +145,17 @@ ${n ? `The user added these notes. Follow them where they apply (for example whi
 `;
 }
 
+// the same prompt as a Markdown file, for attaching to the chat instead of pasting it
+function promptMarkdown(notes) {
+  return `# Instructions: turn a crystal-structure paper into a disorder-model JSON
+
+This file was attached to a chat together with a scientific paper (and possibly its supplementary information or CIF files). Follow the instructions below for that paper.
+
+---
+
+` + buildPrompt(notes);
+}
+
 // ---------------------------------------------------------------------------------- reading the reply
 function extractJson(text) {
   const t = String(text || "").replace(/[“”]/g, '"').replace(/ /g, " ");
@@ -492,6 +503,6 @@ function fixMessage(errors) {
     "\n\nPlease check these against the paper and send the corrected, complete JSON again in one ```json code block.";
 }
 
-const api = { SCHEMA, VERSION, POINT_GROUPS, pointGroupOps, buildPrompt, extractJson, fromPaper, fixMessage, eulerZYZ, arc };
+const api = { SCHEMA, VERSION, POINT_GROUPS, pointGroupOps, buildPrompt, promptMarkdown, extractJson, fromPaper, fixMessage, eulerZYZ, arc };
 if (isNode) module.exports = api; else root.DB_PAPER = api;
 })(typeof window !== "undefined" ? window : globalThis);

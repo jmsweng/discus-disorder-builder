@@ -38,6 +38,12 @@ for (const key of ["schema", "version", "paper", "material", "conditions", "summ
 for (const g of Object.keys(P.POINT_GROUPS)) assert(new RegExp(`[ ,:]${g}[,.]`).test(pr), `prompt does not list point group ${g}`);
 JSON.parse(/FORMAT EXAMPLE[^`]*```\n([\s\S]*?)```/.exec(pr)[1]); // the example in the prompt is valid JSON
 
+// the Markdown file is the same prompt (with the notes) under a short header that says what to do with it
+{
+  const md = P.promptMarkdown("Use Table S3.");
+  assert(md.startsWith("# Instructions") && md.endsWith(P.buildPrompt("Use Table S3.")) && md.includes("Use Table S3."));
+  assert(!/https?:|github/i.test(md));
+}
 // extracting JSON from replies
 const body = JSON.stringify(ice);
 assert.deepStrictEqual(P.extractJson("Here it is:\n```json\n" + body + "\n```\nCheck the weights.").json, ice);
