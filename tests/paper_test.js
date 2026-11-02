@@ -25,8 +25,25 @@ assert.strictEqual(P.pointGroupOps("Q7"), null);
 const pr = P.buildPrompt("Use the 500 K structure from Table S3.");
 assert(pr.includes("Use the 500 K structure from Table S3.") && pr.includes(P.SCHEMA) && pr.includes('status "user"'));
 assert(P.buildPrompt("").includes("(none)"));
+// the prompt is self-contained: no links, and it names every key and value the reader understands
+assert(!/https?:|www\.|github|\.io\b/i.test(pr), "the prompt must not link anywhere");
+for (const key of ["schema", "version", "paper", "material", "conditions", "summary", "cell", "space_group", "sites_are", "asymmetric_unit", "all_positions",
+  "sites", "label", "frac", "occupants", "occupancy", "element", "b_iso", "u_iso", "molecule", "orientation_group", "vacancy", "molecules", "atoms", "xyz",
+  "anchor_atom", "centroid", "geometry_source", "orientation_groups", "primary", "secondary", "from_atom", "to_atom", "to_midpoint_of", "vector", "along",
+  "along_cartesian", "towards", "towards_cartesian", "symmetry", "operations", "displacements", "atom_sigma_A", "molecule_translation_sigma_A",
+  "molecule_libration_sigma_deg", "short_range_order", "site_a", "site_b", "cell_offset", "tendency", "like", "unlike", "strength", "weak", "moderate",
+  "strong", "J_kT", "forbidden_contacts", "element_a", "element_b", "min_distance_A", "experiment", "radiation", "xray", "neutron", "electron",
+  "wavelength_A", "assumptions", "not_representable", "questions_for_user", "reported", "derived", "assumed", "user"])
+  assert(pr.includes(`"${key}"`), `prompt does not name "${key}"`);
+for (const g of Object.keys(P.POINT_GROUPS)) assert(new RegExp(`[ ,:]${g}[,.]`).test(pr), `prompt does not list point group ${g}`);
 JSON.parse(/FORMAT EXAMPLE[^`]*```\n([\s\S]*?)```/.exec(pr)[1]); // the example in the prompt is valid JSON
 
+// the Markdown file is the same prompt (with the notes) under a short header that says what to do with it
+{
+  const md = P.promptMarkdown("Use Table S3.");
+  assert(md.startsWith("# Instructions") && md.endsWith(P.buildPrompt("Use Table S3.")) && md.includes("Use Table S3."));
+  assert(!/https?:|github/i.test(md));
+}
 // extracting JSON from replies
 const body = JSON.stringify(ice);
 assert.deepStrictEqual(P.extractJson("Here it is:\n```json\n" + body + "\n```\nCheck the weights.").json, ice);
