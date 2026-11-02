@@ -954,7 +954,8 @@ function renderBenchControls() {
 }
 // how the preview plane relates to the DISCUS grid of the Calculations step, and whether it is commensurate
 function planeInfo() {
-  const pv = S.calc.preview, u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
+  const pv = S.calc.preview; if (!pv.origin) pv.origin = [0, 0, 0];
+  const u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
   const n = previewN(), notes = [];
   const isInt = x => Math.abs(x - Math.round(x)) < 1e-9;
   if (![...u, ...v].every(isInt)) notes.push("u or v is not a whole-number vector, so the points are not commensurate with the crystal: expect ripples.");

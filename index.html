@@ -10,33 +10,40 @@
 <meta name="description" content="Build disordered crystal models with molecules in preferred orientations and export a discus-python script for diffuse scattering, 3D-ΔPDF and PDF.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Figtree:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
 <style>
-/* Layout: three columns — workflow rail, editor, sticky preview bench; stacks on narrow screens. */
+/* Lattice: the logo's hexagons and violet/gold. Three columns — hexagon step rail, editor, sticky preview
+   bench — under a violet band; panels with cut corners; stacks on narrow screens. */
 :root {
-  --paper: #eef2f2; --panel: #fbfcfc; --sunk: #e3e9ea; --ink: #16232a; --muted: #56676e; --line: #cfd9db;
-  --accent: #0d6a80; --accent-ink: #ffffff; --accent-soft: #d5eaef; --ok: #2c7a4b; --warn: #a2660c; --err: #b93a1d;
-  --warn-soft: #f6ead4; --err-soft: #f6dcd4; --code: #f3f6f6; --view: #f7f9f9; --view-ink: #22323a;
-  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
-  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --r: 6px;
+  --paper: #f2effa; --panel: #ffffff; --sunk: #ebe6f8; --ink: #1d1638; --muted: #675e86; --line: #ddd5f2;
+  --accent: #6d28d9; --accent-ink: #ffffff; --accent-soft: #ede5ff; --ok: #138a52; --warn: #9a5c00; --err: #c2253a;
+  --warn-soft: #fff3d6; --err-soft: #ffe3e7; --code: #f7f4ff; --view: #faf8ff; --view-ink: #1d1638;
+  --gold: #e3a903; --hex: #ddd4f5; --field: #fbfaff; --field-line: #d9d0f2; --card: #f8f5ff;
+  --band-1: #2e1065; --band-2: #5b21b6; --band-3: #7c3aed; --band-ink: #ffffff; --band-sub: #d8c9ff;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "Fira Code", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 10px; --cut: 14px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #0f161a; --panel: #152026; --sunk: #1b2930; --ink: #e2eaec; --muted: #93a6ad; --line: #2a3b43;
-    --accent: #4db3cc; --accent-ink: #062027; --accent-soft: #173842; --ok: #5cc28a; --warn: #e0a64a; --err: #f07c5e;
-    --warn-soft: #3a2e17; --err-soft: #40221a; --code: #111c21; --view: #0c1418; --view-ink: #cfdbe0; color-scheme: dark;
+    --paper: #110c22; --panel: #1a1432; --sunk: #241c42; --ink: #ece8ff; --muted: #a59cc8; --line: #31285a;
+    --accent: #a78bfa; --accent-ink: #1a0b3d; --accent-soft: #2b2155; --ok: #5fd39a; --warn: #f2c14e; --err: #ff7d8e;
+    --warn-soft: #33290f; --err-soft: #3b1724; --code: #150f2b; --view: #0d0920; --view-ink: #e7e1ff;
+    --gold: #facc15; --hex: #31285a; --field: #140f2a; --field-line: #3a3066; --card: #1f1840;
+    --band-1: #1b0b42; --band-2: #3b1690; --band-3: #5b21b6; --band-ink: #ffffff; --band-sub: #c4b2ff; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #0f161a; --panel: #152026; --sunk: #1b2930; --ink: #e2eaec; --muted: #93a6ad; --line: #2a3b43;
-  --accent: #4db3cc; --accent-ink: #062027; --accent-soft: #173842; --ok: #5cc28a; --warn: #e0a64a; --err: #f07c5e;
-  --warn-soft: #3a2e17; --err-soft: #40221a; --code: #111c21; --view: #0c1418; --view-ink: #cfdbe0; color-scheme: dark;
+  --paper: #110c22; --panel: #1a1432; --sunk: #241c42; --ink: #ece8ff; --muted: #a59cc8; --line: #31285a;
+  --accent: #a78bfa; --accent-ink: #1a0b3d; --accent-soft: #2b2155; --ok: #5fd39a; --warn: #f2c14e; --err: #ff7d8e;
+  --warn-soft: #33290f; --err-soft: #3b1724; --code: #150f2b; --view: #0d0920; --view-ink: #e7e1ff;
+  --gold: #facc15; --hex: #31285a; --field: #140f2a; --field-line: #3a3066; --card: #1f1840;
+  --band-1: #1b0b42; --band-2: #3b1690; --band-3: #5b21b6; --band-ink: #ffffff; --band-sub: #c4b2ff; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45; }
-body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--band-1); }
 button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -166,6 +173,65 @@ pre.code { margin: 0; background: var(--code); border: 1px solid var(--line); bo
   padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 20; }
 @media (max-width: 640px) { .brand .sub { display: none; } .brand h1 { font-size: 18px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------------------------------------------------------------- Lattice look */
+.top { background: linear-gradient(100deg, var(--band-1), var(--band-2) 55%, var(--band-3)); color: var(--band-ink); border-bottom: 0; padding-block: 12px; }
+.top .btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .32); color: var(--band-ink); }
+.top .btn:hover { background: rgba(255, 255, 255, .22); border-color: rgba(255, 255, 255, .6); }
+.top .chip { background: #ffffff; }
+.top .chip.ok { color: #138a52; } .top .chip.warn { color: #9a5c00; } .top .chip.err { color: #c2253a; }
+.top :focus-visible { outline-color: #ffffff; }
+.brand { align-items: center; }
+.brand h1 { font-family: var(--f-display); font-weight: 800; font-size: 23px; letter-spacing: -.02em; }
+.brand .sub { color: var(--band-sub); font-size: 13px; }
+.brand .lattice-mark { width: 40px; height: 40px; background: #ffffff; border-radius: 50%; padding: 2px; box-shadow: 0 0 0 2px rgba(255, 255, 255, .25); }
+
+.rail { gap: 0; }
+.rail button { position: relative; padding: 9px 8px 9px 4px; align-items: center; color: var(--muted); }
+.rail button .k { width: 26px; height: 24px; flex: none; display: inline-grid; place-items: center; z-index: 1;
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); background: var(--hex); color: var(--accent); font-weight: 600; font-size: 11px; }
+.rail button:not(:last-child)::after { content: ""; position: absolute; left: 16px; top: 33px; height: 18px; width: 2px; background: var(--hex); }
+.rail button .t { font-family: var(--f-display); font-weight: 600; font-size: 15.5px; line-height: 1.2; }
+.rail button:hover { background: transparent; color: var(--ink); }
+.rail button:hover .k { background: var(--accent-soft); }
+.rail button[aria-current="true"] { background: transparent; color: var(--accent); }
+.rail button[aria-current="true"] .k { background: var(--accent); color: var(--accent-ink); }
+.rail .badge { color: var(--err); font-weight: 600; }
+@media (max-width: 760px) { .rail button:not(:last-child)::after { display: none; } }
+
+.sec-head h2 { font-family: var(--f-display); font-weight: 800; font-size: 30px; letter-spacing: -.025em; }
+.block { border: 0; border-radius: 0; background: var(--panel); padding: 16px 18px;
+  clip-path: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut)); }
+.block h3 { font-family: var(--f-display); font-weight: 700; font-size: 17px; }
+.block h3::before { content: ""; width: 10px; height: 10px; flex: none; background: var(--gold); clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); }
+.bench h3 { font-size: 16px; }
+h4.sub { font-family: var(--f-display); font-weight: 700; }
+.f > span, .tbl th { font-weight: 600; font-size: 12px; color: var(--muted); }
+input[type="number"], input[type="text"], select, textarea { border-radius: 8px; border-color: var(--field-line); background: var(--field); padding: 5px 8px; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.btn { border-radius: 999px; border-color: var(--field-line); background: var(--panel); padding: 5px 12px; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover { color: var(--accent-ink); filter: brightness(1.08); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.btn.danger:hover { background: var(--err-soft); border-color: var(--err); color: var(--err); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip { border-radius: 999px; }
+.tbl td { border-bottom-color: var(--sunk); }
+.tbl tr.sel td { background: var(--accent-soft); }
+.site, .orient { border: 0; background: var(--card); border-radius: 12px; }
+.orient canvas { border-radius: 10px; }
+.canvas-box { border: 0; border-radius: 12px; }
+#dcv { border-radius: 12px !important; }
+.probbar { border-radius: 999px; }
+.msg { border-radius: 8px; }
+.tag { border-radius: 999px; padding: 0 7px; }
+pre.code { border: 0; border-radius: 12px; }
+.hint code, .doc code { background: var(--accent-soft); color: var(--ink); }
+.progress span { background: linear-gradient(90deg, var(--accent), var(--gold)); }
+.toast { background: var(--band-2); color: #ffffff; border-radius: 999px; padding: 8px 16px; }
+details > summary { cursor: pointer; color: var(--muted); }
 
 </style>
 </head>
@@ -1994,7 +2060,7 @@ function nh4cl() {
     { site_a: 1, site_b: 1, t: [1, 0, 0], J: -0.6 }, { site_a: 1, site_b: 1, t: [0, 1, 0], J: -0.6 }, { site_a: 1, site_b: 1, t: [0, 0, 1], J: -0.6 }] };
   s.calc.fourier.steps = [0.1, 0.1, 0.1];
   s.calc.pdf.rmax = 18;
-  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], range: 4 };
+  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 };
   return s;
 }
 
@@ -2037,7 +2103,7 @@ function rotor() {
     { site_a: 0, site_b: 0, t: [1, 0, 0], J: -0.8 }, { site_a: 0, site_b: 0, t: [0, 1, 0], J: -0.8 }, { site_a: 0, site_b: 0, t: [0, 0, 1], J: -0.8 }] };
   s.calc.pdf.rmax = 16;
   s.calc.fourier.steps = [0.125, 0.125, 0.125];
-  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], range: 3 };
+  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 3 };
   return s;
 }
 
@@ -3174,7 +3240,8 @@ function renderBenchControls() {
 }
 // how the preview plane relates to the DISCUS grid of the Calculations step, and whether it is commensurate
 function planeInfo() {
-  const pv = S.calc.preview, u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
+  const pv = S.calc.preview; if (!pv.origin) pv.origin = [0, 0, 0];
+  const u = pv.u.map(Number), v = pv.v.map(Number), o = pv.origin.map(Number);
   const n = previewN(), notes = [];
   const isInt = x => Math.abs(x - Math.round(x)) < 1e-9;
   if (![...u, ...v].every(isInt)) notes.push("u or v is not a whole-number vector, so the points are not commensurate with the crystal: expect ripples.");

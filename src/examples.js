@@ -42,7 +42,7 @@ function nh4cl() {
     { site_a: 1, site_b: 1, t: [1, 0, 0], J: -0.6 }, { site_a: 1, site_b: 1, t: [0, 1, 0], J: -0.6 }, { site_a: 1, site_b: 1, t: [0, 0, 1], J: -0.6 }] };
   s.calc.fourier.steps = [0.1, 0.1, 0.1];
   s.calc.pdf.rmax = 18;
-  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], range: 4 };
+  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 };
   return s;
 }
 
@@ -85,7 +85,7 @@ function rotor() {
     { site_a: 0, site_b: 0, t: [1, 0, 0], J: -0.8 }, { site_a: 0, site_b: 0, t: [0, 1, 0], J: -0.8 }, { site_a: 0, site_b: 0, t: [0, 0, 1], J: -0.8 }] };
   s.calc.pdf.rmax = 16;
   s.calc.fourier.steps = [0.125, 0.125, 0.125];
-  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], range: 3 };
+  s.calc.preview = { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 3 };
   return s;
 }
 
