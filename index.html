@@ -1207,7 +1207,7 @@ function generateScript(state, template) {
     .replace('CONFIG_JSON = r"""__CONFIG__"""', () => 'CONFIG_JSON = r"""\n' + json + '\n"""');
 }
 // discus-python version the exported script installs (git ref: a commit on main or a release tag)
-const DISCUSPDF_REF = "feat/builder-backend";
+const DISCUSPDF_REF = "3cdb6c63fc5aacfafdaa1ec11953a2481c819631";   // discus-python main after #69-#71
 const INSTALL_LINE = `pip install "discuspdf-starter[data] @ git+https://github.com/jmsweng/discus-python@${DISCUSPDF_REF}"`;
 // result files of discuspdf.builder (EXPORT_DEFAULTS there): key -> default and what it writes
 const OUTPUT_FORMATS = {
