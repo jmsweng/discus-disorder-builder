@@ -20,6 +20,8 @@ function base() {
         lots: { enabled: false, shape: "box", size: [5, 5, 5], count: "all", periodic: true } },
       pdf: { enabled: true, radiation: "xray", qmin: 0.5, qmax: 7.5, dq: 0.01, qsig: 0, rmax: 20, dr: 0.02, wavelength: "" },
       preview: { u: [1, 0, 0], v: [0, 1, 0], origin: [0, 0, 0], range: 4 } },
+    // result files the script writes (discuspdf.builder EXPORT_DEFAULTS)
+    outputs: { hdf5: true, csv: true, png: true, vtk: false, npz: false, txt: false },
   };
 }
 
