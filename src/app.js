@@ -557,7 +557,7 @@ RENDER.calc = () => {
       ${field("Range ± h k l", trio("calc.fourier.hmax"))}</div>
     <div class="fields">${field("Radiation", sel("calc.fourier.radiation", [["xray", "X-ray"], ["neutron", "neutron"]]))}
       ${field("λ (DISCUS symbol or Å)", txt("calc.fourier.wavelength", 'class="w-s" list="wvl-syms"'))}${WVL_LIST}</div>
-    <p class="hint">The 3D runs write <code>disp off</code>, so λ only labels the output files; it does not change the intensities. The in-page preview always uses f = Z.</p>
+    <p class="hint">The 3D runs write <code>disp off</code>, so λ only labels the output files; it does not change the intensities. The in-page preview is approximate: it always uses f = Z.</p>
     <div class="fields">${field("Bragg subtraction (set aver, %)", num("calc.fourier.aver_percent", 'min="0" max="100" class="w-s"'))}
       ${field("Friedel symmetry", sel("calc.fourier.symmetry", [["", "engine default"], ["friedel", "friedel"], ["ignore", "ignore"], ["apply", "apply"]]))}
       ${chk("calc.fourier.delta_pdf", "3D-ΔPDF from the diffuse volume")}${chk("calc.fourier.total", "Also total scattering + 3D-PDF (Patterson)")}</div>
@@ -605,20 +605,23 @@ RENDER.script = () => {
   // export even with problems: they are listed above the buttons, and the script stops with a clear message if it cannot run
   try { code = DB.generateScript(withState(), TEMPLATE); } catch (e) { err = `The script cannot be written: ${e.message}`; }
   const lines = code ? code.split("\n").length : 0;
-  return head("Python script", "One self-contained script: it rebuilds this model with numpy and discus-python, writes the DISCUS structure and runs the calculations. The model is embedded as JSON, so you can re-import the script here later.") + `
+  return head("Python script", "A short script with this model embedded as JSON. discus-python (discuspdf.builder) does the work: it builds the crystal, writes the DISCUS structure and runs the calculations. You can re-import the script or the JSON here later.") + `
   ${v.errs.length && code ? `<div class="msg warn">The model has ${v.errs.length} problem${v.errs.length === 1 ? "" : "s"} (listed below). You can still export the script, but it, or DISCUS, may stop or give wrong results until they are fixed.</div>` : ""}
   ${msgs(v.errs, "err")}${msgs(v.warns, "warn")}${err ? msgs([err], "err") : ""}
+  <div class="block"><h3>Result files</h3>
+    <p class="hint">What the script writes besides the structure (<code>supercell.stru</code>, <code>supercell.xyz</code>, <code>structure_summary.json</code>) and the DISCUS run folders, which it always keeps.</p>
+    <div class="fields">${Object.entries(DB.OUTPUT_FORMATS).map(([k, f]) => `<span title="${esc(f.files)}">${chk("outputs." + k, esc(f.label))}</span>`).join("")}</div></div>
   <div class="block"><h3>Export <span class="grow"></span></h3>
     <div class="fields"><button type="button" class="btn primary" data-a="dl-script" ${code ? "" : "disabled"}>Download ${esc(fileBase())}.py</button>
       <button type="button" class="btn" data-a="copy-script" ${code ? "" : "disabled"}>Copy script</button>
       <button type="button" class="btn" data-a="dl-json">Download model JSON</button>
       ${code ? `<span class="hint">${lines} lines</span>` : ""}</div>
     <div class="doc"><p>Run it where DISCUS_SUITE 6.23.01 and discus-python are installed:</p>
-      <pre class="code">pip install "discuspdf[data] @ git+https://github.com/jmsweng/discus-python"
+      <pre class="code">${esc(DB.INSTALL_LINE)}
 python ${esc(fileBase())}.py --dry-run        # build the crystal, stage the DISCUS inputs
 python ${esc(fileBase())}.py --numpy-preview  # quick diffuse plane, no DISCUS needed
 python ${esc(fileBase())}.py                  # full run</pre>
-      <p>Results: <code>supercell.stru</code>, <code>supercell.xyz</code>, <code>diffuse.npz</code> and slice plots, <code>delta_pdf.npz</code> / <code>.vts</code>, <code>pdf_1d.txt</code>, and every DISCUS run folder with its macro and log.</p></div></div>
+      <p>The saved model runs without the script too: <code>python -m discuspdf.builder run model.json</code>. Results: the structure files, the formats chosen above (${Object.entries(DB.OUTPUT_FORMATS).filter(([k]) => (S.outputs || {})[k]).map(([, f]) => esc(f.files)).join("; ") || "none"}), and every DISCUS run folder with its macro and log. <code>--numpy-preview</code> uses real X-ray f₀ (with <code>xraydb</code>) or neutron b, unlike the in-page preview (f = Z).</p></div></div>
   ${code ? `<pre class="code" id="code">${esc(code)}</pre>` : ""}`;
 };
 const fileBase = () => (S.title || "model").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40) || "model";
@@ -907,7 +910,13 @@ const ACT = {
   "step-commensurate": () => { S.calc.fourier.steps = S.supercell.map(n => +(1 / +n).toFixed(10)); commit(); },
   "dl-script": () => { try { download(`${fileBase()}.py`, DB.generateScript(withState(), TEMPLATE), "text/x-python"); } catch (e) { toast(e.message); } },
   "copy-script": () => copyText(DB.generateScript(withState(), TEMPLATE)),
-  "dl-json": () => download(`${fileBase()}.json`, JSON.stringify({ schema: "discuspdf-disorder-builder-state", version: 1, state: S }, null, 1), "application/json"),
+  // the model as the script embeds it (runs with python -m discuspdf.builder run; builder_state re-imports it);
+  // a model that cannot be built yet is saved as page state only
+  "dl-json": () => {
+    let body;
+    try { body = DB.buildConfig(S); } catch (e) { body = { schema: "discuspdf-disorder-builder-state", version: 1, state: S }; toast(`Saved as page state only (${e.message}); it can be re-imported, not run.`); }
+    download(`${fileBase()}.json`, JSON.stringify(body, null, 1), "application/json");
+  },
   "export": () => ACT["dl-json"](),
   "import": () => $("#file-in").click(),
   "paper-open": () => { section = "paper"; placing = false; renderRail(); renderSection(); window.scrollTo(0, 0); },

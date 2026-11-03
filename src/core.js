@@ -830,18 +830,32 @@ function buildConfig(state) {
     },
     mmc: state.mmc.enabled ? JSON.parse(JSON.stringify(state.mmc)) : { enabled: false },
     calc: JSON.parse(JSON.stringify(state.calc)),
+    outputs: Object.fromEntries(Object.keys(OUTPUT_FORMATS).map(k => [k, !!((state.outputs || {})[k] ?? OUTPUT_FORMATS[k].on)])),
     builder_state: JSON.parse(JSON.stringify(state)),
   };
 }
 function generateScript(state, template) {
   const cfg = buildConfig(state);
   const json = JSON.stringify(cfg, null, 1);
-  if (!template.includes('CONFIG_JSON = r"""__CONFIG__"""')) throw new Error("script template is damaged");
-  return template.replace('CONFIG_JSON = r"""__CONFIG__"""', () => 'CONFIG_JSON = r"""\n' + json + '\n"""');
+  if (!template.includes('CONFIG_JSON = r"""__CONFIG__"""') || !template.includes("__DISCUSPDF_REF__")) throw new Error("script template is damaged");
+  return template.split("__DISCUSPDF_REF__").join(DISCUSPDF_REF)
+    .replace('CONFIG_JSON = r"""__CONFIG__"""', () => 'CONFIG_JSON = r"""\n' + json + '\n"""');
 }
+// discus-python version the exported script installs (git ref: a commit on main or a release tag)
+const DISCUSPDF_REF = "3cdb6c63fc5aacfafdaa1ec11953a2481c819631";   // discus-python main after #69-#71
+const INSTALL_LINE = `pip install "discuspdf-starter[data] @ git+https://github.com/jmsweng/discus-python@${DISCUSPDF_REF}"`;
+// result files of discuspdf.builder (EXPORT_DEFAULTS there): key -> default and what it writes
+const OUTPUT_FORMATS = {
+  hdf5: { on: true, label: "HDF5 volumes", files: "diffuse.h5, total.h5, delta_pdf.h5, pdf3d.h5" },
+  csv: { on: true, label: "1D PDF as CSV", files: "pdf_1d.csv" },
+  png: { on: true, label: "PNG plots", files: "*_slices.png, pdf_1d.png" },
+  vtk: { on: false, label: "VTK for ParaView", files: "delta_pdf.vts, pdf3d_patterson.vts" },
+  npz: { on: false, label: "numpy .npz (old engine files)", files: "diffuse.npz, total.npz, delta_pdf.npz" },
+  txt: { on: false, label: "1D PDF as text", files: "pdf_1d.txt" },
+};
 
 const api = { SYMBOLS, Z, DISCUS, discusInfo, isElementName, massNumber, scatteringTable, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
-  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
+  orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, DISCUSPDF_REF, INSTALL_LINE, OUTPUT_FORMATS, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
 })(typeof window !== "undefined" ? window : globalThis);
