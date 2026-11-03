@@ -24,6 +24,11 @@ A static web page (live at https://jmsweng.github.io/discus-disorder-builder/) f
   orientation has a relative weight.
 - **Space groups**: pick any of the 230 space groups (standard settings) and a Wyckoff position; the builder adds
   a site at every symmetry-equivalent position, with a new atom or the occupants copied from another site.
+- **Atom types and isotopes** (Calculations): how DISCUS reads each atom name — elements, its ions (`Fe3+`, `O2-`)
+  and deuterium `D`; any other name is read as the element it starts with (`Ni62` → Ni, `C1` → C). An isotope gets
+  its own neutron scattering length, which the script passes to DISCUS with `scat NAME, 0,0,0,0,0,0,0,0, b`
+  (in the fourier menu, also before the powder run). The name table is `src/discus_names.js`, taken from DISCUS
+  6.23.01 `lib_f90/element_data_mod.f90`.
 - **Sites**: each site holds one occupant per cell (atom, molecule in one orientation of a group, or vacancy) with
   given probabilities, drawn independently or with exact composition.
 - **Disorder**: correlated occupants (composition-conserving swap Monte Carlo with pair energies along neighbour

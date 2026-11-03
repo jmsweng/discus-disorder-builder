@@ -99,9 +99,47 @@ def molecule_local_coords(mol: dict) -> tuple[list[str], np.ndarray]:
     return species, xyz - origin
 
 
+def _chem(sp: str) -> str | None:
+    """Element of an atom name, read the way DISCUS reads it: D (deuterium) counts as H; any other name is the
+    element its first two, or else first, letters spell (Ni62 -> Ni, C1 -> C, FE3+ -> Fe). Same as the page."""
+    from discuspdf._elements import _ELEMENTS
+    up = str(sp or "").strip().upper()
+    if up in ("D", "D1-"):
+        return "H"
+    for t in (up[:2], up[:1]):
+        s = t[:1] + t[1:].lower()
+        if s in _ELEMENTS:
+            return s
+    return None
+
+
+def _z(sp: str) -> int:
+    from discuspdf._elements import _ELEMENTS
+    e = _chem(sp)
+    if e is None:
+        raise ValueError(f"atom name {sp!r} is not an element and does not start with one")
+    return _ELEMENTS[e]
+
+
+def _mass_number(sp: str) -> int | None:
+    """Mass number written after the element (Ni62, O18, Li7); D is 2. Labels such as C1 or Fe2 are not isotopes."""
+    import re
+    up = str(sp or "").strip().upper()
+    if up in ("D", "D1-"):
+        return 2
+    m = re.fullmatch(r"[A-Za-z]{1,2}(\d{1,3})", str(sp).strip())
+    z = _z(sp) if _chem(sp) else 0
+    if not m or z <= 1:
+        return None
+    a = int(m.group(1))
+    return a if 2 * z - 1 <= a <= 3 * z + 20 else None
+
+
 def _mass(symbol: str) -> float:
-    from discuspdf._elements import atomic_number
-    z = atomic_number(symbol)
+    a = _mass_number(symbol)
+    if a:
+        return 2.014 if a == 2 and _chem(symbol) == "H" else float(a)
+    z = _z(symbol)
     return 1.008 if z == 1 else 2.0 * z + (0.5 if z > 20 else 0.0)   # rough masses for centre of mass only
 
 
@@ -182,10 +220,9 @@ def draw_occupants(cfg: dict, classes: list[list[dict]], n: tuple, rng) -> np.nd
     return choice
 
 
-def _element(sp: str) -> str:
-    import re
-    m = re.match(r"([A-Z][a-z]?)", sp or "")
-    return m.group(1) if m else sp
+def _rule_hits(r: str, sp: str) -> bool:
+    """A contact rule names an atom name or an element: 'Ni' covers Ni and Ni62, 'H' covers H and D."""
+    return r == "any" or str(r).upper() == str(sp).upper() or r == _chem(sp)
 
 
 def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
@@ -202,7 +239,7 @@ def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
 
     def shape(c):
         if c["type"] == "atom":
-            return [_element(c["species"])], np.zeros((1, 3))
+            return [c["species"]], np.zeros((1, 3))
         if c["type"] == "molecule":
             sp, loc = mols[c["molecule"]]
             return sp, loc @ np.asarray(c["R"]).T
@@ -212,7 +249,7 @@ def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
     R = [max([0.0] + [float(np.linalg.norm(p, axis=1).max()) for _, p in sh if len(p)]) for sh in shapes]
     dmax = math.sqrt(max(r[2] for r in rules))
     recip = np.linalg.norm(np.linalg.inv(A), axis=0)
-    match = lambda r, e1, e2: ((r[0] in ("any", e1)) and (r[1] in ("any", e2))) or ((r[0] in ("any", e2)) and (r[1] in ("any", e1)))
+    match = lambda r, e1, e2: (_rule_hits(r[0], e1) and _rule_hits(r[1], e2)) or (_rule_hits(r[0], e2) and _rule_hits(r[1], e1))
     for i, s1 in enumerate(sites):
         for j, s2 in enumerate(sites):
             cut = R[i] + R[j] + dmax
@@ -709,15 +746,55 @@ def fourier_wavelength(w):
         return s.lower()
 
 
-def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True):
-    from discuspdf import Diffuse3DRunner, StructureSource, prepare_fourier_run
+def scat_lines(cfg: dict, species, radiation: str, log=None) -> list[str]:
+    """DISCUS `scat` commands (fourier menu) for atom names with a scattering length of their own (isotopes):
+    `scat NAME, 0,0,0,0,0,0,0,0, b` sets the X-ray-style coefficients to zero and the constant term to b, which is
+    all DISCUS uses for neutrons (fourier_sup.f90 `form`). Only for neutron runs; X-rays see the element."""
+    if radiation != "neutron":
+        return []
+    custom = {str(k).upper(): float(v) for k, v in (cfg.get("scattering") or {}).items()}
+    names = sorted({str(s).strip().upper() for s in species} - {VOID})
+    out = [f"  scat {nm}, 0,0,0,0,0,0,0,0, {custom[nm]:.8g}" for nm in names if nm in custom]
+    if log and out:
+        log(f"  neutron scattering lengths of their own: " + ", ".join(f"{nm} {custom[nm]:g} fm" for nm in names if nm in custom))
+    return out
+
+
+def stage_fourier_run(runner, config, source, stru_path: Path, title: str, extra: list[str]):
+    """prepare_fourier_run with extra commands placed in the fourier menu, just before `show` / `run`."""
+    import tempfile
+    from discuspdf import prepare_fourier_run
+    if not extra:
+        return prepare_fourier_run(runner, config, source, stru_path, title=title)
+    text = config.render(source, title=title)
+    marker = "\n  show\n  run\nexit\n"
+    if text.count(marker) != 1:
+        raise RuntimeError("could not place the scat commands in the generated Fourier macro")
+    text = text.replace(marker, "\n" + "\n".join(extra) + marker)
+    raw = stru_path.read_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        macro = Path(tmp) / "run.mac"
+        macro.write_bytes(text.encode("ascii"))
+        staged = Path(tmp) / source.file
+        staged.write_bytes(raw.replace(b"\r\n", b"\n"))
+        cfgp = Path(tmp) / "fourier_config.json"
+        cfgp.write_text(json.dumps({**config.to_dict(), "structure": {
+            "kind": source.kind, "file": source.file, "crystal_cells": source.crystal_cells,
+            "staged_with_lf": raw != staged.read_bytes()}, "scat_commands": extra}, indent=1) + "\n", encoding="utf-8")
+        return runner.prepare(macro, assets=(staged, cfgp))
+
+
+def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True,
+                species=()):
+    from discuspdf import Diffuse3DRunner, StructureSource
     calc3 = cfg["calc"]["fourier"]
     outfile = f"{name}.h5"
     fc = fourier_config(cfg, calc3, aver, outfile, seed8, lots_ok)
     runner = Diffuse3DRunner(out / "runs_3d", launcher=launcher, output_filename=outfile,
                              timeout_seconds=int(cfg["calc"].get("timeout_s", 86400)))
     src = StructureSource.stru(stru_path.name, crystal_cells=tuple(n))
-    run = prepare_fourier_run(runner, fc, src, stru_path, title=f"{cfg.get('title', 'model')} {name}")
+    extra = scat_lines(cfg, species, calc3.get("radiation") or "xray", log)
+    run = stage_fourier_run(runner, fc, src, stru_path, f"{cfg.get('title', 'model')} {name}", extra)
     log(f"  staged {name}: grid {fc.grid.shape}, set aver {aver:g} → {run.directory}")
     if args.dry_run:
         return None
@@ -740,7 +817,7 @@ def save_slices(vol, title: str, png: Path, log) -> None:
     log(f"  wrote {png.name}")
 
 
-def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
+def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log, species=()):
     """1D PDF from the disordered supercell. Uses discuspdf's verified powder→PDF macro
     (render_pdf_macro) with `read stru <supercell>` instead of `read cell <unit cell>`."""
     import shutil
@@ -757,6 +834,11 @@ def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
     macro = render_pdf_macro(pc).replace("cell model.cll,1,1,1", f"stru {stru_path.name}")
     if f"stru {stru_path.name}" not in macro:
         raise RuntimeError("could not adapt the PDF macro to read the supercell")
+    extra = scat_lines(cfg, species, p.get("radiation", "xray"), log)
+    if extra:   # custom scattering lengths are set in the fourier menu and kept for the powder run
+        if macro.count("\npowder\n") != 1:
+            raise RuntimeError("could not place the scat commands in the PDF macro")
+        macro = macro.replace("\npowder\n", "\nfourier\n" + "\n".join(extra) + "\nexit\npowder\n")
     d = out / "runs_pdf" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy2(stru_path, d / stru_path.name)
@@ -782,7 +864,6 @@ def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
 def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     """Direct-sum diffuse intensity in one reciprocal plane, f = Z (no Q dependence, no DW):
     I_diff = |Σ_atoms f e^{2πi h·x}|² − |Σ_cells e^{2πi h·R} ⟨F_cell⟩|², per unit cell. Independent of DISCUS."""
-    from discuspdf._elements import atomic_number
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -793,7 +874,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     keep = ~info["is_void"]
     x = structure.frac[keep] * n                       # unit-cell fractions
     ci = structure.cell_index[keep]
-    f = np.array([atomic_number(s) for s in structure.species[keep]], float)
+    f = np.array([_z(s) for s in structure.species[keep]], float)
     loc = x - ci                                       # coordinates relative to the cell origin
     ncell = int(np.prod(n))
     cid = (ci[:, 2] * n[1] + ci[:, 1]) * n[0] + ci[:, 0]
@@ -912,10 +993,17 @@ def main(argv=None) -> int:
     n = tuple(int(x) for x in structure.supercell)
     seed8 = seed8_from(rng_discus)
     f3 = calc.get("fourier", {})
+    custom_b = {str(k).upper() for k in (cfg.get("scattering") or {})}
+    if custom_b and calc.get("debye_waller") and structure.b_iso is not None:
+        names = np.char.upper(structure.species.astype(str))
+        for nm in sorted(custom_b):
+            if len(np.unique(structure.b_iso[names == nm])) > 1:
+                log(f"  WARNING: {nm} has several B values, so DISCUS makes several atom types of that name; "
+                    "`scat` sets the scattering length of the first one only. Give the atoms one B or switch Debye–Waller off.")
     if f3.get("enabled"):
         log(f"3D diffuse scattering (DISCUS fourier, {f3.get('radiation') or 'xray'}, "
             f"λ {fourier_wavelength(f3.get('wavelength'))}, Bragg subtracted) …")
-        diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log,
+        diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log, species=structure.species,
                               aver=float(f3.get("aver_percent", 100.0)), name="diffuse")
         if diffuse is not None:
             from discuspdf import SampledVolume, write_vtk
@@ -934,6 +1022,7 @@ def main(argv=None) -> int:
         if f3.get("total"):
             log("Total 3D scattering (Bragg present) and 3D-PDF (Patterson) …")
             total = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log, aver=0.0, name="total",
+                                species=structure.species,
                                 lots_ok=False)
             if total is not None:
                 from discuspdf import SampledVolume, write_vtk
@@ -949,7 +1038,7 @@ def main(argv=None) -> int:
         log("1D powder PDF (DISCUS powder, Debye sum over the supercell) …")
         if structure.n_atoms > 60000:
             log(f"  note: {structure.n_atoms} atoms; the Debye sum scales as N², this can take long")
-        res = run_powder_pdf(cfg, out, stru_path, launcher, args, log)
+        res = run_powder_pdf(cfg, out, stru_path, launcher, args, log, species=structure.species)
         if res is not None:
             import matplotlib
             matplotlib.use("Agg")

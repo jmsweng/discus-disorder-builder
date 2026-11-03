@@ -277,9 +277,9 @@ function fromPaper(x) {
     const atoms = [];
     (m.atoms || []).forEach((a, j) => {
       const el = str(a.element || a.el);
-      if (!DB.elementOf(el)) fail(`Molecule “${name}”, atom ${j + 1}: “${el}” is not an element symbol.`);
+      if (!DB.isElementName(el)) fail(`Molecule “${name}”, atom ${j + 1}: “${el}” is not an element symbol.`);
       const xyz = vector(a.xyz, `${name} atom ${j + 1} xyz`, { record: false });
-      if (xyz) atoms.push({ el: DB.elementOf(el) || el, xyz: xyz.map(q => +q.toFixed(6)) });
+      if (xyz) atoms.push({ el, xyz: xyz.map(q => +q.toFixed(6)) });
     });
     if (!atoms.length) fail(`Molecule “${name}” has no atoms.`);
     let anchor = "centroid";
@@ -379,7 +379,7 @@ function fromPaper(x) {
       if (p == null) return;
       if (type === "atom") {
         const el = str(o.element || o.species);
-        if (!DB.elementOf(el)) { fail(`${what}: “${el}” is not an element symbol.`); return; }
+        if (!DB.isElementName(el)) { fail(`${what}: “${el}” is not an element symbol.`); return; }
         let b = "";
         if (o.b_iso != null) b = number(o.b_iso, `${label0}: B of ${el} (Å²)`, { min: 0 });
         else if (o.u_iso != null) { const u = number(o.u_iso, `${label0}: U of ${el} (Å²)`, { min: 0 }); if (u != null) { b = +(8 * Math.PI * Math.PI * u).toFixed(4); rec(`${label0}: B of ${el} (Å²) = 8π²U`, b, "from U", "derived"); } }
@@ -425,7 +425,7 @@ function fromPaper(x) {
   // displacements
   const d = x.displacements || {};
   Object.entries(d.atom_sigma_A || {}).forEach(([el, v]) => {
-    if (!DB.elementOf(el)) { fail(`Displacements: “${el}” is not an element symbol.`); return; }
+    if (!DB.isElementName(el)) { fail(`Displacements: “${el}” is not an element symbol.`); return; }
     const q = number(v, `σ ${el} (Å)`, { min: 0 }); if (q != null) s.disorder.atomic_displacements[el] = q;
   });
   if (d.molecule_translation_sigma_A != null) { const q = number(d.molecule_translation_sigma_A, "Molecule translation σ (Å)", { min: 0 }); if (q != null) s.disorder.molecule_rigid.translation_sigma = q; }
@@ -459,7 +459,7 @@ function fromPaper(x) {
   // forbidden contacts
   (x.forbidden_contacts || []).forEach((r, k) => {
     const ea = str(r.element_a) || "any", eb = str(r.element_b) || "any";
-    if ((ea !== "any" && !DB.elementOf(ea)) || (eb !== "any" && !DB.elementOf(eb))) { fail(`Forbidden contact ${k + 1}: elements must be element symbols or "any".`); return; }
+    if ((ea !== "any" && !DB.isElementName(ea)) || (eb !== "any" && !DB.isElementName(eb))) { fail(`Forbidden contact ${k + 1}: elements must be element symbols or "any".`); return; }
     const dmin = number(r.min_distance_A, `Forbidden contact ${ea}–${eb} (Å)`, { positive: true });
     if (dmin == null) return;
     s.disorder.contacts.enabled = true;

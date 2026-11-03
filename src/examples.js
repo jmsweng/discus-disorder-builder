@@ -8,7 +8,7 @@ function base() {
   return {
     title: "", seed: 1234, output_dir: "discus_model_out",
     cell: { a: 4, b: 4, c: 4, alpha: 90, beta: 90, gamma: 90 }, supercell: [10, 10, 10],
-    molecules: [], orientations: [], sites: [],
+    molecules: [], orientations: [], sites: [], scattering: {},
     disorder: { atomic_displacements: {}, molecule_rigid: { translation_sigma: 0, libration_sigma_deg: 0 }, clash_threshold: 0.8,
       correlations: { enabled: false, sweeps: 50, kT: 1, match: "orientation", interactions: [] },
       contacts: { enabled: false, change: "orientation", anneal: true, rules: [] } },

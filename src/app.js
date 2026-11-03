@@ -574,8 +574,29 @@ RENDER.calc = () => {
       ${field("Qmax (Å⁻¹)", num("calc.pdf.qmax", 'class="w-s"'))}${field("ΔQ", num("calc.pdf.dq", 'class="w-s"'))}${field("Gaussian width (set delta)", num("calc.pdf.qsig", 'class="w-s"'))}
       ${field("λ (Å, empty = default)", txt("calc.pdf.wavelength", 'class="w-s"'))}</div>
     <div class="fields">${field("rmax (Å)", num("calc.pdf.rmax", 'class="w-s"'))}${field("Δr (Å)", num("calc.pdf.dr", 'class="w-s"'))}</div>
-    <p class="hint">Computed by DISCUS's powder Debye sum over the disordered supercell (N² pairs), so long-range peaks are damped by the finite crystal size. DISCUS 6.23.01 caps Q at ≈ 12.3/λ.</p></div>`;
+    <p class="hint">Computed by DISCUS's powder Debye sum over the disordered supercell (N² pairs), so long-range peaks are damped by the finite crystal size. DISCUS 6.23.01 caps Q at ≈ 12.3/λ.</p></div>
+  ${atomTypesBlock()}`;
 };
+
+// ---- atom types and scattering lengths (Calculations step)
+function atomTypesBlock() {
+  const t = DB.scatteringTable(S);
+  const rows = t.rows.map(r => {
+    const i = r.info, how = !i ? '<span class="sum bad">not readable</span>'
+      : i.known ? (i.name === "D" || i.name === "D1-" ? "deuterium (DISCUS table)" : i.name === i.el.toUpperCase() ? "element" : "ion / special form factor")
+      : `label, read as ${esc(title2(i.as))}`;
+    const xr = !i ? "—" : i.el === "D" ? "as H" : `as ${esc(title2(i.as))}`;
+    const iso = r.isotope ? `<span class="tag" title="mass number ${r.mass}">isotope?</span>` : "";
+    return `<tr><td class="num">${esc(r.label)}</td><td>${how} ${iso}</td><td class="num">${xr}</td><td class="num">${i ? fmt(r.b, 4) : "—"}</td>
+      <td><input type="number" step="any" class="w-po" data-scat="${esc(r.name)}" value="${r.custom == null ? "" : esc(r.custom)}" placeholder="${i ? fmt(r.b, 4) : ""}"
+        title="Coherent neutron scattering length of ${esc(r.label)} in fm. Empty: DISCUS's value for ${i ? esc(i.as) : "this name"}."></td></tr>`;
+  }).join("");
+  return `<div class="block"><h3>Atom types and isotopes</h3>
+    <p class="hint">How DISCUS reads each atom name in the model. Besides elements it knows ions (e.g. <code>Fe3+</code>, <code>O2-</code>) and deuterium <code>D</code>. Any other name is read as the element it starts with, so <code>Ni62</code> or <code>C1</code> scatter as Ni and C. For an isotope, name its atoms after the element (at most 4 characters, e.g. <code>Ni62</code>, <code>Li7</code>, <code>O18</code>) and give its neutron scattering length here; the script passes it to DISCUS with <code>scat</code>. X-rays see the element, whatever the isotope.</p>
+    ${rows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Atom name</th><th>DISCUS reads it as</th><th>X-ray form factor</th><th>Neutron b, DISCUS (fm)</th><th>Neutron b, your value (fm)</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="hint">No atoms in the model yet.</p>'}
+    <p class="hint">Scattering lengths of isotopes: NIST table at <a href="https://www.ncnr.nist.gov/resources/n-lengths/" target="_blank" rel="noopener">ncnr.nist.gov/resources/n-lengths</a> (coherent b, real part, in fm). ${t.neutron ? "" : "Your values are used only in neutron calculations, and none is switched on."}</p></div>`;
+}
+const title2 = s => s.charAt(0) + s.slice(1).toLowerCase();
 
 // ---- 8 script
 RENDER.script = () => {
@@ -955,6 +976,11 @@ document.addEventListener("change", e => {
     save(); renderBenchControls(); markDiffuseStale(); return;
   }
   if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); renderBenchControls(); markDiffuseStale(); return; }
+  if (el.dataset.scat) {
+    const k = el.dataset.scat; S.scattering = S.scattering || {};
+    if (el.value === "") delete S.scattering[k]; else S.scattering[k] = { b: +el.value };
+    commit(); return;
+  }
   const path = el.dataset.b; if (!path) return;
   let v = el.value;
   const t = el.dataset.t;

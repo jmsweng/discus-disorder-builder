@@ -21,7 +21,34 @@ const COLORS = { H: "#e8ecef", C: "#5b6670", N: "#3d6fd6", O: "#e0412f", F: "#7f
   Ca: "#57b884", Si: "#d9b38c", Al: "#b9a6a6", Fe: "#d2722e", Cu: "#c8803c", Ag: "#b9c2cc", Au: "#e3b43c",
   Zn: "#7d80b0", Ni: "#4fbf6a", Co: "#e07ba0", Ti: "#9aa3ab", Zr: "#7fbfbf", Pb: "#57595f", Sn: "#7b8c99",
   B: "#e9a3a3", Ba: "#2fae8e", Sr: "#3fbf9f", Mn: "#a67fd6", Cr: "#8a9bd6", V: "#a6a6ab", La: "#5fb3d6", U: "#2f8fd6" };
-function elementOf(sp) { const m = /^([A-Z][a-z]?)/.exec(sp || ""); return m && Z[m[1]] ? m[1] : null; }
+// Atom names as DISCUS reads them: its own table of elements, ions and deuterium (D), and for any other name
+// the same guess DISCUS makes (lib_f90 guess_element): the name up to a +/- sign, then its first two letters,
+// then its first letter. So "Ni62" or "C1" are labels that scatter as Ni or C unless given their own b.
+const DISCUS = (typeof module !== "undefined" && module.exports) ? require("./discus_names.js") : (root.DB_DISCUS || []);
+const DNAME = {};
+DISCUS.forEach(([n, e, b]) => { DNAME[n] = { el: e, b }; });
+const title = s => s.charAt(0) + s.slice(1).toLowerCase();
+function discusInfo(sp) {
+  const up = String(sp || "").trim().toUpperCase();
+  if (!up) return null;
+  if (DNAME[up]) return { name: up, known: true, as: up, el: title(DNAME[up].el), b: DNAME[up].b };
+  const k = up[2] === "+" || up[2] === "-" ? 3 : up[3] === "+" || up[3] === "-" ? 4 : 0;
+  const tries = (k ? [up.slice(0, k)] : []).concat([up.slice(0, 2), up.slice(0, 1)]);
+  for (const t of tries) if (DNAME[t]) return { name: up, known: false, as: t, el: title(DNAME[t].el), b: DNAME[t].b };
+  return null;
+}
+// a name DISCUS knows outright (element, ion, D) or a plain element symbol; no guessed labels
+function isElementName(sp) { const i = discusInfo(sp); return !!(i && i.known) || !!Z[String(sp || "").trim()]; }
+// chemical element (D counts as H) — used for colours, radii, Z and contact rules
+function elementOf(sp) { const i = discusInfo(sp); if (!i) return null; const e = i.el === "D" ? "H" : i.el; return Z[e] ? e : null; }
+// mass number written after the element (Ni62, O18, Li7); D is 2. Labels such as C1 or Fe2 are not isotopes.
+function massNumber(sp) {
+  const i = discusInfo(sp); if (!i) return null;
+  if (i.el === "D") return 2;
+  const m = /^[A-Za-z]{1,2}(\d{1,3})$/.exec(String(sp).trim()), z = Z[elementOf(sp)];
+  if (!m || !z || z === 1) return null;
+  const A = +m[1]; return A >= 2 * z - 1 && A <= 3 * z + 20 ? A : null;
+}
 function zOf(sp) { const e = elementOf(sp); return e ? Z[e] : 0; }
 function colorOf(sp) {
   const e = elementOf(sp);
@@ -178,7 +205,7 @@ function moleculeLocal(mol) {
   else { xyz.forEach(p => { o = add(o, p); }); o = scale(o, 1 / Math.max(1, xyz.length)); }
   return { species: mol.atoms.map(a => a.el), xyz: xyz.map(p => sub(p, o)) };
 }
-function massOf(sp) { const z = zOf(sp); return z === 1 ? 1.008 : 2 * z + (z > 20 ? 0.5 : 0); }
+function massOf(sp) { const A = massNumber(sp); if (A) return A === 2 && elementOf(sp) === "H" ? 2.014 : A; const z = zOf(sp); return z === 1 ? 1.008 : 2 * z + (z > 20 ? 0.5 : 0); }
 function bondsOf(species, xyz, tol = 0.45) {
   const out = [];
   for (let i = 0; i < xyz.length; i++) for (let j = i + 1; j < xyz.length; j++) {
@@ -337,7 +364,7 @@ const PENALTY = { forbidden: 100, strong: 10, mild: 2 };
 const VDW = { H: 1.20, C: 1.70, N: 1.55, O: 1.52, F: 1.47, P: 1.80, S: 1.80, Cl: 1.75, Br: 1.85, I: 1.98, Se: 1.90, Si: 2.10,
   B: 1.92, As: 1.85, Te: 2.06, Xe: 2.16, Kr: 2.02, Ar: 1.88, Ne: 1.54, He: 1.40 };
 function ruleMatch(r, e1, e2) {
-  const m = (x, y) => x === "any" || x === y;
+  const m = (x, y) => x === "any" || x === y || x === elementOf(y);
   return (m(r.a, e1) && m(r.b, e2)) || (m(r.a, e2) && m(r.b, e1));
 }
 // For every pair of neighbouring site positions, a table of penalties (and contact counts) for each pair of
@@ -349,7 +376,7 @@ function contactModel(state, A, classes) {
   if (!rules.length) return { entries: sites.map(() => []), pairs: [], rules };
   const otab = {};
   const shapes = classes.map(cl => cl.map(c => {
-    if (c.type === "atom") return { el: [elementOf(c.species) || c.species], p: [[0, 0, 0]] };
+    if (c.type === "atom") return { el: [c.species], p: [[0, 0, 0]] };
     if (c.type === "molecule") { const loc = moleculeLocal(c.mol); return { el: loc.species, p: loc.xyz.map(q => mv(c.R, q)) }; }
     return { el: [], p: [] };
   }));
@@ -642,7 +669,10 @@ function validate(state) {
   Object.values(otab).forEach(t => t.errors.forEach(e => errs.push(`Orientation group “${t.group.name}”: ${e}`)));
   state.molecules.forEach(m => {
     if (!m.atoms.length) errs.push(`Molecule “${m.name}” has no atoms.`);
-    m.atoms.forEach((a, i) => { if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol.`); });
+    m.atoms.forEach((a, i) => {
+      if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol or a name DISCUS can read.`);
+      else if (String(a.el).length > 4) errs.push(`Molecule “${m.name}”, atom ${i + 1}: atom names longer than 4 characters break DISCUS.`);
+    });
   });
   const labels = new Set();
   state.sites.forEach(s => { try { siteRotation(s, A); } catch (e) { errs.push(e.message + "."); } });
@@ -654,7 +684,7 @@ function validate(state) {
     if (Math.abs(tot - 1) > 1e-6) errs.push(`Site ${s.label}: probabilities add up to ${tot.toFixed(4)}, not 1.`);
     s.occupants.forEach(o => {
       if (o.type === "atom") {
-        if (!elementOf(o.species)) errs.push(`Site ${s.label}: “${o.species}” is not an element symbol.`);
+        if (!elementOf(o.species)) errs.push(`Site ${s.label}: “${o.species}” is not an element symbol or a name DISCUS can read.`);
         else if (o.species.length > 4) errs.push(`Site ${s.label}: species names longer than 4 characters break DISCUS.`);
       }
       if (o.type === "molecule") {
@@ -673,7 +703,7 @@ function validate(state) {
     (con.rules || []).forEach((r, i) => {
       if (!(+r.dmin > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the minimum distance must be > 0.`);
       if (!(+r.penalty > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the penalty must be > 0.`);
-      [r.a, r.b].forEach(e => { if (e !== "any" && !Z[e]) errs.push(`Forbidden contacts, rule ${i + 1}: “${e}” is not an element.`); });
+      [r.a, r.b].forEach(e => { if (e !== "any" && !elementOf(e)) errs.push(`Forbidden contacts, rule ${i + 1}: “${e}” is not an element.`); });
     });
     if (!(+(state.disorder.correlations || {}).sweeps > 0)) errs.push("Forbidden contacts need at least one Monte Carlo sweep (Disorder → sweeps).");
   }
@@ -714,6 +744,14 @@ function validate(state) {
     const bad = state.sites.some(s => (+s.b_iso || 0) < 0.001) || state.sites.some(s => s.occupants.some(o => o.b != null && o.b !== "" && +o.b < 0.001));
     if (bad) errs.push("Debye–Waller on: every B must be ≥ 0.001 Å² (DISCUS replaces smaller values by 1).");
   }
+  // atom types and neutron scattering lengths
+  const scat = scatteringTable(state);
+  scat.rows.forEach(r => {
+    if (r.custom != null && !isFinite(r.custom)) errs.push(`Scattering length of ${r.label}: give a number in fm.`);
+    if (scat.neutron && r.isotope && r.custom == null)
+      warns.push(`${r.label} looks like an isotope but has no scattering length of its own: DISCUS will use natural ${r.el} (b = ${r.b} fm) for neutrons. Set its b under Calculations → Atom types.`);
+  });
+  scat.clashes.forEach(c => errs.push(`${c.join(" and ")} are the same atom name for DISCUS (it ignores upper/lower case); rename one of them.`));
   return { errs, warns };
 }
 
@@ -728,6 +766,27 @@ function wavelengthValue(w) {
   if (!/^[+]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return null;
   const x = +s;
   return Number.isFinite(x) && x > 0 ? x : null;
+}
+
+// ---------------------------------------------------------------------------------- atom types / scattering
+// Every atom name used in the model, how DISCUS will read it, its neutron b (DISCUS table) and a custom b
+// (state.scattering[NAME].b, fm) that the script passes to DISCUS with "scat NAME, 0,0,0,0,0,0,0,0, b".
+function scatteringTable(state) {
+  const names = [];
+  (state.sites || []).forEach(s => (s.occupants || []).forEach(o => { if (o.type === "atom" && o.species) names.push(String(o.species)); }));
+  (state.molecules || []).forEach(m => (m.atoms || []).forEach(a => { if (a.el) names.push(String(a.el)); }));
+  const byUp = {}, clashes = [];
+  names.forEach(n => { const u = n.trim().toUpperCase(); (byUp[u] = byUp[u] || new Set()).add(n.trim()); });
+  const custom = state.scattering || {};
+  const rows = Object.keys(byUp).sort().map(u => {
+    const labels = [...byUp[u]]; if (labels.length > 1) clashes.push(labels);
+    const info = discusInfo(u), c = custom[u] && custom[u].b !== "" && custom[u].b != null ? +custom[u].b : null;
+    return { name: u, label: labels[0], info, el: info ? info.el : null, b: info ? info.b : null, custom: c,
+      isotope: !!(info && !info.known && massNumber(labels[0])), mass: massNumber(labels[0]) };
+  });
+  const f = (state.calc || {}).fourier || {}, p = (state.calc || {}).pdf || {};
+  const neutron = (f.enabled && f.radiation === "neutron") || (p.enabled && p.radiation === "neutron");
+  return { rows, clashes, neutron };
 }
 
 // ---------------------------------------------------------------------------------- export
@@ -750,6 +809,9 @@ function buildConfig(state) {
     output_dir: state.output_dir || "discus_model_out",
     cell: Object.fromEntries(["a", "b", "c", "alpha", "beta", "gamma"].map(k => [k, +state.cell[k]])),
     supercell: state.supercell.map(Number), molecules, orientations,
+    // custom coherent neutron scattering lengths (fm) by DISCUS atom name (upper case)
+    scattering: Object.fromEntries(Object.entries(state.scattering || {})
+      .filter(([, v]) => v && v.b !== "" && v.b != null && isFinite(+v.b)).map(([k, v]) => [k.toUpperCase(), +v.b])),
     sites: state.sites.map(s => ({
       label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw, ...(s.sym ? { sym: s.sym } : {}),
       occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b), sigma: num(o.sigma) }
@@ -778,7 +840,7 @@ function generateScript(state, template) {
   return template.replace('CONFIG_JSON = r"""__CONFIG__"""', () => 'CONFIG_JSON = r"""\n' + json + '\n"""');
 }
 
-const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
+const api = { SYMBOLS, Z, DISCUS, discusInfo, isElementName, massNumber, scatteringTable, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
   orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;

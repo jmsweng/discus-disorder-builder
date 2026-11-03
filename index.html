@@ -412,9 +412,47 @@ def molecule_local_coords(mol: dict) -> tuple[list[str], np.ndarray]:
     return species, xyz - origin
 
 
+def _chem(sp: str) -> str | None:
+    """Element of an atom name, read the way DISCUS reads it: D (deuterium) counts as H; any other name is the
+    element its first two, or else first, letters spell (Ni62 -> Ni, C1 -> C, FE3+ -> Fe). Same as the page."""
+    from discuspdf._elements import _ELEMENTS
+    up = str(sp or "").strip().upper()
+    if up in ("D", "D1-"):
+        return "H"
+    for t in (up[:2], up[:1]):
+        s = t[:1] + t[1:].lower()
+        if s in _ELEMENTS:
+            return s
+    return None
+
+
+def _z(sp: str) -> int:
+    from discuspdf._elements import _ELEMENTS
+    e = _chem(sp)
+    if e is None:
+        raise ValueError(f"atom name {sp!r} is not an element and does not start with one")
+    return _ELEMENTS[e]
+
+
+def _mass_number(sp: str) -> int | None:
+    """Mass number written after the element (Ni62, O18, Li7); D is 2. Labels such as C1 or Fe2 are not isotopes."""
+    import re
+    up = str(sp or "").strip().upper()
+    if up in ("D", "D1-"):
+        return 2
+    m = re.fullmatch(r"[A-Za-z]{1,2}(\d{1,3})", str(sp).strip())
+    z = _z(sp) if _chem(sp) else 0
+    if not m or z <= 1:
+        return None
+    a = int(m.group(1))
+    return a if 2 * z - 1 <= a <= 3 * z + 20 else None
+
+
 def _mass(symbol: str) -> float:
-    from discuspdf._elements import atomic_number
-    z = atomic_number(symbol)
+    a = _mass_number(symbol)
+    if a:
+        return 2.014 if a == 2 and _chem(symbol) == "H" else float(a)
+    z = _z(symbol)
     return 1.008 if z == 1 else 2.0 * z + (0.5 if z > 20 else 0.0)   # rough masses for centre of mass only
 
 
@@ -495,10 +533,9 @@ def draw_occupants(cfg: dict, classes: list[list[dict]], n: tuple, rng) -> np.nd
     return choice
 
 
-def _element(sp: str) -> str:
-    import re
-    m = re.match(r"([A-Z][a-z]?)", sp or "")
-    return m.group(1) if m else sp
+def _rule_hits(r: str, sp: str) -> bool:
+    """A contact rule names an atom name or an element: 'Ni' covers Ni and Ni62, 'H' covers H and D."""
+    return r == "any" or str(r).upper() == str(sp).upper() or r == _chem(sp)
 
 
 def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
@@ -515,7 +552,7 @@ def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
 
     def shape(c):
         if c["type"] == "atom":
-            return [_element(c["species"])], np.zeros((1, 3))
+            return [c["species"]], np.zeros((1, 3))
         if c["type"] == "molecule":
             sp, loc = mols[c["molecule"]]
             return sp, loc @ np.asarray(c["R"]).T
@@ -525,7 +562,7 @@ def contact_model(cfg: dict, classes, A: np.ndarray, mols: dict) -> dict:
     R = [max([0.0] + [float(np.linalg.norm(p, axis=1).max()) for _, p in sh if len(p)]) for sh in shapes]
     dmax = math.sqrt(max(r[2] for r in rules))
     recip = np.linalg.norm(np.linalg.inv(A), axis=0)
-    match = lambda r, e1, e2: ((r[0] in ("any", e1)) and (r[1] in ("any", e2))) or ((r[0] in ("any", e2)) and (r[1] in ("any", e1)))
+    match = lambda r, e1, e2: (_rule_hits(r[0], e1) and _rule_hits(r[1], e2)) or (_rule_hits(r[0], e2) and _rule_hits(r[1], e1))
     for i, s1 in enumerate(sites):
         for j, s2 in enumerate(sites):
             cut = R[i] + R[j] + dmax
@@ -1022,15 +1059,55 @@ def fourier_wavelength(w):
         return s.lower()
 
 
-def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True):
-    from discuspdf import Diffuse3DRunner, StructureSource, prepare_fourier_run
+def scat_lines(cfg: dict, species, radiation: str, log=None) -> list[str]:
+    """DISCUS `scat` commands (fourier menu) for atom names with a scattering length of their own (isotopes):
+    `scat NAME, 0,0,0,0,0,0,0,0, b` sets the X-ray-style coefficients to zero and the constant term to b, which is
+    all DISCUS uses for neutrons (fourier_sup.f90 `form`). Only for neutron runs; X-rays see the element."""
+    if radiation != "neutron":
+        return []
+    custom = {str(k).upper(): float(v) for k, v in (cfg.get("scattering") or {}).items()}
+    names = sorted({str(s).strip().upper() for s in species} - {VOID})
+    out = [f"  scat {nm}, 0,0,0,0,0,0,0,0, {custom[nm]:.8g}" for nm in names if nm in custom]
+    if log and out:
+        log(f"  neutron scattering lengths of their own: " + ", ".join(f"{nm} {custom[nm]:g} fm" for nm in names if nm in custom))
+    return out
+
+
+def stage_fourier_run(runner, config, source, stru_path: Path, title: str, extra: list[str]):
+    """prepare_fourier_run with extra commands placed in the fourier menu, just before `show` / `run`."""
+    import tempfile
+    from discuspdf import prepare_fourier_run
+    if not extra:
+        return prepare_fourier_run(runner, config, source, stru_path, title=title)
+    text = config.render(source, title=title)
+    marker = "\n  show\n  run\nexit\n"
+    if text.count(marker) != 1:
+        raise RuntimeError("could not place the scat commands in the generated Fourier macro")
+    text = text.replace(marker, "\n" + "\n".join(extra) + marker)
+    raw = stru_path.read_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        macro = Path(tmp) / "run.mac"
+        macro.write_bytes(text.encode("ascii"))
+        staged = Path(tmp) / source.file
+        staged.write_bytes(raw.replace(b"\r\n", b"\n"))
+        cfgp = Path(tmp) / "fourier_config.json"
+        cfgp.write_text(json.dumps({**config.to_dict(), "structure": {
+            "kind": source.kind, "file": source.file, "crystal_cells": source.crystal_cells,
+            "staged_with_lf": raw != staged.read_bytes()}, "scat_commands": extra}, indent=1) + "\n", encoding="utf-8")
+        return runner.prepare(macro, assets=(staged, cfgp))
+
+
+def run_fourier(cfg, out: Path, stru_path: Path, n, launcher, seed8, args, log, *, aver, name, lots_ok=True,
+                species=()):
+    from discuspdf import Diffuse3DRunner, StructureSource
     calc3 = cfg["calc"]["fourier"]
     outfile = f"{name}.h5"
     fc = fourier_config(cfg, calc3, aver, outfile, seed8, lots_ok)
     runner = Diffuse3DRunner(out / "runs_3d", launcher=launcher, output_filename=outfile,
                              timeout_seconds=int(cfg["calc"].get("timeout_s", 86400)))
     src = StructureSource.stru(stru_path.name, crystal_cells=tuple(n))
-    run = prepare_fourier_run(runner, fc, src, stru_path, title=f"{cfg.get('title', 'model')} {name}")
+    extra = scat_lines(cfg, species, calc3.get("radiation") or "xray", log)
+    run = stage_fourier_run(runner, fc, src, stru_path, f"{cfg.get('title', 'model')} {name}", extra)
     log(f"  staged {name}: grid {fc.grid.shape}, set aver {aver:g} → {run.directory}")
     if args.dry_run:
         return None
@@ -1053,7 +1130,7 @@ def save_slices(vol, title: str, png: Path, log) -> None:
     log(f"  wrote {png.name}")
 
 
-def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
+def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log, species=()):
     """1D PDF from the disordered supercell. Uses discuspdf's verified powder→PDF macro
     (render_pdf_macro) with `read stru <supercell>` instead of `read cell <unit cell>`."""
     import shutil
@@ -1070,6 +1147,11 @@ def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
     macro = render_pdf_macro(pc).replace("cell model.cll,1,1,1", f"stru {stru_path.name}")
     if f"stru {stru_path.name}" not in macro:
         raise RuntimeError("could not adapt the PDF macro to read the supercell")
+    extra = scat_lines(cfg, species, p.get("radiation", "xray"), log)
+    if extra:   # custom scattering lengths are set in the fourier menu and kept for the powder run
+        if macro.count("\npowder\n") != 1:
+            raise RuntimeError("could not place the scat commands in the PDF macro")
+        macro = macro.replace("\npowder\n", "\nfourier\n" + "\n".join(extra) + "\nexit\npowder\n")
     d = out / "runs_pdf" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy2(stru_path, d / stru_path.name)
@@ -1095,7 +1177,6 @@ def run_powder_pdf(cfg, out: Path, stru_path: Path, launcher, args, log):
 def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     """Direct-sum diffuse intensity in one reciprocal plane, f = Z (no Q dependence, no DW):
     I_diff = |Σ_atoms f e^{2πi h·x}|² − |Σ_cells e^{2πi h·R} ⟨F_cell⟩|², per unit cell. Independent of DISCUS."""
-    from discuspdf._elements import atomic_number
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1106,7 +1187,7 @@ def numpy_preview(cfg, structure, info, out: Path, log, plane=None):
     keep = ~info["is_void"]
     x = structure.frac[keep] * n                       # unit-cell fractions
     ci = structure.cell_index[keep]
-    f = np.array([atomic_number(s) for s in structure.species[keep]], float)
+    f = np.array([_z(s) for s in structure.species[keep]], float)
     loc = x - ci                                       # coordinates relative to the cell origin
     ncell = int(np.prod(n))
     cid = (ci[:, 2] * n[1] + ci[:, 1]) * n[0] + ci[:, 0]
@@ -1225,10 +1306,17 @@ def main(argv=None) -> int:
     n = tuple(int(x) for x in structure.supercell)
     seed8 = seed8_from(rng_discus)
     f3 = calc.get("fourier", {})
+    custom_b = {str(k).upper() for k in (cfg.get("scattering") or {})}
+    if custom_b and calc.get("debye_waller") and structure.b_iso is not None:
+        names = np.char.upper(structure.species.astype(str))
+        for nm in sorted(custom_b):
+            if len(np.unique(structure.b_iso[names == nm])) > 1:
+                log(f"  WARNING: {nm} has several B values, so DISCUS makes several atom types of that name; "
+                    "`scat` sets the scattering length of the first one only. Give the atoms one B or switch Debye–Waller off.")
     if f3.get("enabled"):
         log(f"3D diffuse scattering (DISCUS fourier, {f3.get('radiation') or 'xray'}, "
             f"λ {fourier_wavelength(f3.get('wavelength'))}, Bragg subtracted) …")
-        diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log,
+        diffuse = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log, species=structure.species,
                               aver=float(f3.get("aver_percent", 100.0)), name="diffuse")
         if diffuse is not None:
             from discuspdf import SampledVolume, write_vtk
@@ -1247,6 +1335,7 @@ def main(argv=None) -> int:
         if f3.get("total"):
             log("Total 3D scattering (Bragg present) and 3D-PDF (Patterson) …")
             total = run_fourier(cfg, out, stru_path, n, launcher, seed8, args, log, aver=0.0, name="total",
+                                species=structure.species,
                                 lots_ok=False)
             if total is not None:
                 from discuspdf import SampledVolume, write_vtk
@@ -1262,7 +1351,7 @@ def main(argv=None) -> int:
         log("1D powder PDF (DISCUS powder, Debye sum over the supercell) …")
         if structure.n_atoms > 60000:
             log(f"  note: {structure.n_atoms} atoms; the Debye sum scales as N², this can take long")
-        res = run_powder_pdf(cfg, out, stru_path, launcher, args, log)
+        res = run_powder_pdf(cfg, out, stru_path, launcher, args, log, species=structure.species)
         if res is not None:
             import matplotlib
             matplotlib.use("Agg")
@@ -1297,6 +1386,17 @@ if __name__ == "__main__":
     sys.exit(main())
 </script>
 <script>
+/* Atom names DISCUS 6.23.01 knows (lib_f90/element_data_mod.f90: per_name, per_element, per_bcoh), with the
+   element whose X-ray form factor table it uses and the coherent neutron scattering length b (fm) it uses.
+   Extracted from github.com/jmsweng/DiffuseCode @ a85c9de (same tables as tproffen/DiffuseCode v.6.23.01). */
+(function (root) {
+"use strict";
+const DISCUS_NAMES = [["H","H",-3.739],["H.","H",-3.739],["H1-","H",-3.739],["D","D",6.671],["D1-","D",6.671],["HE","HE",3.26],["LI","LI",-1.9],["LI1+","LI",-1.9],["BE","BE",7.79],["BE2+","BE",7.79],["B","B",5.3],["C","C",6.646],["C.","C",6.646],["N","N",9.36],["O","O",5.803],["O1-","O",5.803],["O2-","O",5.803],["F","F",5.654],["F1-","F",5.654],["NE","NE",4.566],["NA","NA",3.63],["NA1+","NA",3.63],["MG","MG",5.375],["MG2+","MG",5.375],["AL","AL",3.449],["AL3+","AL",4.1491],["SI","SI",4.1491],["SI.","SI",4.1491],["SI4+","SI",4.1491],["P","P",5.13],["S","S",2.847],["CL","CL",9.577],["CL1-","CL",9.577],["AR","AR",1.909],["K","K",3.67],["K1+","K",3.67],["CA","CA",4.7],["CA2+","CA",4.7],["SC","SC",12.29],["SC3+","SC",12.29],["TI","TI",-3.438],["TI2+","TI",-3.438],["TI3+","TI",-3.438],["TI4+","TI",-3.438],["V","V",-0.3824],["V2+","V",-0.3824],["V3+","V",-0.3824],["V5+","V",-0.3824],["CR","CR",3.635],["CR2+","CR",3.635],["CR3+","CR",3.635],["MN","MN",-3.73],["MN2+","MN",-3.73],["MN3+","MN",-3.73],["MN4+","MN",-3.73],["FE","FE",9.45],["FE2+","FE",9.45],["FE3+","FE",9.45],["CO","CO",2.49],["CO2+","CO",2.49],["CO3+","CO",2.49],["NI","NI",10.3],["NI2+","NI",10.3],["NI3+","NI",10.3],["CU","CU",7.718],["CU1+","CU",7.718],["CU2+","CU",7.718],["ZN","ZN",5.68],["ZN2+","ZN",5.68],["GA","GA",7.288],["GA3+","GA",7.288],["GE","GE",8.185],["GE4+","GE",8.185],["AS","AS",6.58],["SE","SE",7.97],["BR","BR",6.795],["BR1-","BR",6.795],["KR","KR",7.81],["RB","RB",7.09],["RB1+","RB",7.09],["SR","SR",7.02],["SR2+","SR",7.02],["Y","Y",7.75],["Y3+","Y",7.75],["ZR","ZR",7.16],["ZR4+","ZR",7.16],["NB","NB",7.054],["NB3+","NB",7.054],["NB5+","NB",7.054],["MO","MO",6.715],["MO3+","MO",6.715],["MO5+","MO",6.715],["MO6+","MO",6.715],["TC","TC",6.8],["RU","RU",7.03],["RU3+","RU",7.03],["RU4+","RU",7.03],["RH","RH",5.88],["RH3+","RH",5.88],["RH4+","RH",5.88],["PD","PD",5.91],["PD2+","PD",5.91],["PD4+","PD",5.91],["AG","AG",5.922],["AG1+","AG",5.922],["AG2+","AG",5.922],["CD","CD",4.87],["CD2+","CD",4.87],["IN","IN",4.065],["IN3+","IN",4.065],["SN","SN",6.225],["SN2+","SN",6.225],["SN4+","SN",6.225],["SB","SB",5.57],["SB3+","SB",5.57],["SB5+","SB",5.57],["TE","TE",5.8],["I","I",5.28],["I1-","I",5.28],["XE","XE",4.92],["CS","CS",5.42],["CS1+","CS",5.42],["BA","BA",5.07],["BA2+","BA",5.07],["LA","LA",8.24],["LA3+","LA",8.24],["CE","CE",4.84],["CE3+","CE",4.84],["CE4+","CE",4.84],["PR","PR",4.58],["PR3+","PR",4.58],["PR4+","PR",4.58],["ND","ND",7.69],["ND3+","ND",7.69],["PM","PM",12.6],["PM3+","PM",12.6],["SM","SM",0.8],["SM3+","SM",0.8],["EU","EU",7.22],["EU2+","EU",7.22],["EU3+","EU",7.22],["GD","GD",6.5],["GD3+","GD",6.5],["TB","TB",7.38],["TB3+","TB",7.38],["DY","DY",16.9],["DY3+","DY",16.9],["HO","HO",8.01],["HO3+","HO",8.01],["ER","ER",7.79],["ER3+","ER",7.79],["TM","TM",7.07],["TM3+","TM",7.07],["YB","YB",12.43],["YB2+","YB",12.43],["YB3+","YB",12.43],["LU","LU",7.21],["LU3+","LU",7.21],["HF","HF",7.7],["HF4+","HF",7.7],["TA","TA",6.91],["TA5+","TA",6.91],["W","W",4.86],["W6+","W",4.86],["RE","RE",9.2],["OS","OS",10.7],["OS4+","OS",10.7],["IR","IR",10.6],["IR3+","IR",10.6],["IR4+","IR",10.6],["PT","PT",9.6],["PT2+","PT",9.6],["PT4+","PT",9.6],["AU","AU",7.63],["AU1+","AU",7.63],["AU3+","AU",7.63],["HG","HG",12.692],["HG1+","HG",12.692],["HG2+","HG",12.692],["TL","TL",8.776],["TL1+","TL",8.776],["TL3+","TL",8.776],["PB","PB",9.405],["PB2+","PB",9.405],["PB4+","PB",9.405],["BI","BI",8.532],["BI3+","BI",8.532],["BI5+","BI",8.532],["PO","PO",99.900002],["AT","AT",99.900002],["RN","RN",99.900002],["FR","FR",99.900002],["RA","RA",10.0],["RA2+","RA",10.0],["AC","AC",99.900002],["AC3+","AC",99.900002],["TH","TH",10.31],["TH4+","TH",10.31],["PA","PA",9.1],["U","U",8.417],["U3+","U",8.417],["U4+","U",8.417],["U6+","U",8.417],["NP","NP",0.0],["NP3+","NP",0.0],["NP4+","NP",0.0],["NP6+","NP",0.0],["PU","PU",0.0],["PU3+","PU",0.0],["PU4+","PU",0.0],["PU6+","PU",0.0],["AM","AM",0.0],["CM","CM",0.0],["BK","BK",0.0],["CF","CF",0.0]];
+if (typeof module !== "undefined" && module.exports) module.exports = DISCUS_NAMES; else root.DB_DISCUS = DISCUS_NAMES;
+})(typeof window !== "undefined" ? window : globalThis);
+
+</script>
+<script>
 /* Disorder Builder core: lattice maths, orientations, random realisation, diffuse preview and
    script generation. No DOM access, so it runs in Node for tests as well as in the page. */
 (function (root) {
@@ -1320,7 +1420,34 @@ const COLORS = { H: "#e8ecef", C: "#5b6670", N: "#3d6fd6", O: "#e0412f", F: "#7f
   Ca: "#57b884", Si: "#d9b38c", Al: "#b9a6a6", Fe: "#d2722e", Cu: "#c8803c", Ag: "#b9c2cc", Au: "#e3b43c",
   Zn: "#7d80b0", Ni: "#4fbf6a", Co: "#e07ba0", Ti: "#9aa3ab", Zr: "#7fbfbf", Pb: "#57595f", Sn: "#7b8c99",
   B: "#e9a3a3", Ba: "#2fae8e", Sr: "#3fbf9f", Mn: "#a67fd6", Cr: "#8a9bd6", V: "#a6a6ab", La: "#5fb3d6", U: "#2f8fd6" };
-function elementOf(sp) { const m = /^([A-Z][a-z]?)/.exec(sp || ""); return m && Z[m[1]] ? m[1] : null; }
+// Atom names as DISCUS reads them: its own table of elements, ions and deuterium (D), and for any other name
+// the same guess DISCUS makes (lib_f90 guess_element): the name up to a +/- sign, then its first two letters,
+// then its first letter. So "Ni62" or "C1" are labels that scatter as Ni or C unless given their own b.
+const DISCUS = (typeof module !== "undefined" && module.exports) ? require("./discus_names.js") : (root.DB_DISCUS || []);
+const DNAME = {};
+DISCUS.forEach(([n, e, b]) => { DNAME[n] = { el: e, b }; });
+const title = s => s.charAt(0) + s.slice(1).toLowerCase();
+function discusInfo(sp) {
+  const up = String(sp || "").trim().toUpperCase();
+  if (!up) return null;
+  if (DNAME[up]) return { name: up, known: true, as: up, el: title(DNAME[up].el), b: DNAME[up].b };
+  const k = up[2] === "+" || up[2] === "-" ? 3 : up[3] === "+" || up[3] === "-" ? 4 : 0;
+  const tries = (k ? [up.slice(0, k)] : []).concat([up.slice(0, 2), up.slice(0, 1)]);
+  for (const t of tries) if (DNAME[t]) return { name: up, known: false, as: t, el: title(DNAME[t].el), b: DNAME[t].b };
+  return null;
+}
+// a name DISCUS knows outright (element, ion, D) or a plain element symbol; no guessed labels
+function isElementName(sp) { const i = discusInfo(sp); return !!(i && i.known) || !!Z[String(sp || "").trim()]; }
+// chemical element (D counts as H) — used for colours, radii, Z and contact rules
+function elementOf(sp) { const i = discusInfo(sp); if (!i) return null; const e = i.el === "D" ? "H" : i.el; return Z[e] ? e : null; }
+// mass number written after the element (Ni62, O18, Li7); D is 2. Labels such as C1 or Fe2 are not isotopes.
+function massNumber(sp) {
+  const i = discusInfo(sp); if (!i) return null;
+  if (i.el === "D") return 2;
+  const m = /^[A-Za-z]{1,2}(\d{1,3})$/.exec(String(sp).trim()), z = Z[elementOf(sp)];
+  if (!m || !z || z === 1) return null;
+  const A = +m[1]; return A >= 2 * z - 1 && A <= 3 * z + 20 ? A : null;
+}
 function zOf(sp) { const e = elementOf(sp); return e ? Z[e] : 0; }
 function colorOf(sp) {
   const e = elementOf(sp);
@@ -1477,7 +1604,7 @@ function moleculeLocal(mol) {
   else { xyz.forEach(p => { o = add(o, p); }); o = scale(o, 1 / Math.max(1, xyz.length)); }
   return { species: mol.atoms.map(a => a.el), xyz: xyz.map(p => sub(p, o)) };
 }
-function massOf(sp) { const z = zOf(sp); return z === 1 ? 1.008 : 2 * z + (z > 20 ? 0.5 : 0); }
+function massOf(sp) { const A = massNumber(sp); if (A) return A === 2 && elementOf(sp) === "H" ? 2.014 : A; const z = zOf(sp); return z === 1 ? 1.008 : 2 * z + (z > 20 ? 0.5 : 0); }
 function bondsOf(species, xyz, tol = 0.45) {
   const out = [];
   for (let i = 0; i < xyz.length; i++) for (let j = i + 1; j < xyz.length; j++) {
@@ -1636,7 +1763,7 @@ const PENALTY = { forbidden: 100, strong: 10, mild: 2 };
 const VDW = { H: 1.20, C: 1.70, N: 1.55, O: 1.52, F: 1.47, P: 1.80, S: 1.80, Cl: 1.75, Br: 1.85, I: 1.98, Se: 1.90, Si: 2.10,
   B: 1.92, As: 1.85, Te: 2.06, Xe: 2.16, Kr: 2.02, Ar: 1.88, Ne: 1.54, He: 1.40 };
 function ruleMatch(r, e1, e2) {
-  const m = (x, y) => x === "any" || x === y;
+  const m = (x, y) => x === "any" || x === y || x === elementOf(y);
   return (m(r.a, e1) && m(r.b, e2)) || (m(r.a, e2) && m(r.b, e1));
 }
 // For every pair of neighbouring site positions, a table of penalties (and contact counts) for each pair of
@@ -1648,7 +1775,7 @@ function contactModel(state, A, classes) {
   if (!rules.length) return { entries: sites.map(() => []), pairs: [], rules };
   const otab = {};
   const shapes = classes.map(cl => cl.map(c => {
-    if (c.type === "atom") return { el: [elementOf(c.species) || c.species], p: [[0, 0, 0]] };
+    if (c.type === "atom") return { el: [c.species], p: [[0, 0, 0]] };
     if (c.type === "molecule") { const loc = moleculeLocal(c.mol); return { el: loc.species, p: loc.xyz.map(q => mv(c.R, q)) }; }
     return { el: [], p: [] };
   }));
@@ -1941,7 +2068,10 @@ function validate(state) {
   Object.values(otab).forEach(t => t.errors.forEach(e => errs.push(`Orientation group “${t.group.name}”: ${e}`)));
   state.molecules.forEach(m => {
     if (!m.atoms.length) errs.push(`Molecule “${m.name}” has no atoms.`);
-    m.atoms.forEach((a, i) => { if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol.`); });
+    m.atoms.forEach((a, i) => {
+      if (!elementOf(a.el)) errs.push(`Molecule “${m.name}”, atom ${i + 1}: “${a.el}” is not an element symbol or a name DISCUS can read.`);
+      else if (String(a.el).length > 4) errs.push(`Molecule “${m.name}”, atom ${i + 1}: atom names longer than 4 characters break DISCUS.`);
+    });
   });
   const labels = new Set();
   state.sites.forEach(s => { try { siteRotation(s, A); } catch (e) { errs.push(e.message + "."); } });
@@ -1953,7 +2083,7 @@ function validate(state) {
     if (Math.abs(tot - 1) > 1e-6) errs.push(`Site ${s.label}: probabilities add up to ${tot.toFixed(4)}, not 1.`);
     s.occupants.forEach(o => {
       if (o.type === "atom") {
-        if (!elementOf(o.species)) errs.push(`Site ${s.label}: “${o.species}” is not an element symbol.`);
+        if (!elementOf(o.species)) errs.push(`Site ${s.label}: “${o.species}” is not an element symbol or a name DISCUS can read.`);
         else if (o.species.length > 4) errs.push(`Site ${s.label}: species names longer than 4 characters break DISCUS.`);
       }
       if (o.type === "molecule") {
@@ -1972,7 +2102,7 @@ function validate(state) {
     (con.rules || []).forEach((r, i) => {
       if (!(+r.dmin > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the minimum distance must be > 0.`);
       if (!(+r.penalty > 0)) errs.push(`Forbidden contacts, rule ${i + 1}: the penalty must be > 0.`);
-      [r.a, r.b].forEach(e => { if (e !== "any" && !Z[e]) errs.push(`Forbidden contacts, rule ${i + 1}: “${e}” is not an element.`); });
+      [r.a, r.b].forEach(e => { if (e !== "any" && !elementOf(e)) errs.push(`Forbidden contacts, rule ${i + 1}: “${e}” is not an element.`); });
     });
     if (!(+(state.disorder.correlations || {}).sweeps > 0)) errs.push("Forbidden contacts need at least one Monte Carlo sweep (Disorder → sweeps).");
   }
@@ -2013,6 +2143,14 @@ function validate(state) {
     const bad = state.sites.some(s => (+s.b_iso || 0) < 0.001) || state.sites.some(s => s.occupants.some(o => o.b != null && o.b !== "" && +o.b < 0.001));
     if (bad) errs.push("Debye–Waller on: every B must be ≥ 0.001 Å² (DISCUS replaces smaller values by 1).");
   }
+  // atom types and neutron scattering lengths
+  const scat = scatteringTable(state);
+  scat.rows.forEach(r => {
+    if (r.custom != null && !isFinite(r.custom)) errs.push(`Scattering length of ${r.label}: give a number in fm.`);
+    if (scat.neutron && r.isotope && r.custom == null)
+      warns.push(`${r.label} looks like an isotope but has no scattering length of its own: DISCUS will use natural ${r.el} (b = ${r.b} fm) for neutrons. Set its b under Calculations → Atom types.`);
+  });
+  scat.clashes.forEach(c => errs.push(`${c.join(" and ")} are the same atom name for DISCUS (it ignores upper/lower case); rename one of them.`));
   return { errs, warns };
 }
 
@@ -2027,6 +2165,27 @@ function wavelengthValue(w) {
   if (!/^[+]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return null;
   const x = +s;
   return Number.isFinite(x) && x > 0 ? x : null;
+}
+
+// ---------------------------------------------------------------------------------- atom types / scattering
+// Every atom name used in the model, how DISCUS will read it, its neutron b (DISCUS table) and a custom b
+// (state.scattering[NAME].b, fm) that the script passes to DISCUS with "scat NAME, 0,0,0,0,0,0,0,0, b".
+function scatteringTable(state) {
+  const names = [];
+  (state.sites || []).forEach(s => (s.occupants || []).forEach(o => { if (o.type === "atom" && o.species) names.push(String(o.species)); }));
+  (state.molecules || []).forEach(m => (m.atoms || []).forEach(a => { if (a.el) names.push(String(a.el)); }));
+  const byUp = {}, clashes = [];
+  names.forEach(n => { const u = n.trim().toUpperCase(); (byUp[u] = byUp[u] || new Set()).add(n.trim()); });
+  const custom = state.scattering || {};
+  const rows = Object.keys(byUp).sort().map(u => {
+    const labels = [...byUp[u]]; if (labels.length > 1) clashes.push(labels);
+    const info = discusInfo(u), c = custom[u] && custom[u].b !== "" && custom[u].b != null ? +custom[u].b : null;
+    return { name: u, label: labels[0], info, el: info ? info.el : null, b: info ? info.b : null, custom: c,
+      isotope: !!(info && !info.known && massNumber(labels[0])), mass: massNumber(labels[0]) };
+  });
+  const f = (state.calc || {}).fourier || {}, p = (state.calc || {}).pdf || {};
+  const neutron = (f.enabled && f.radiation === "neutron") || (p.enabled && p.radiation === "neutron");
+  return { rows, clashes, neutron };
 }
 
 // ---------------------------------------------------------------------------------- export
@@ -2049,6 +2208,9 @@ function buildConfig(state) {
     output_dir: state.output_dir || "discus_model_out",
     cell: Object.fromEntries(["a", "b", "c", "alpha", "beta", "gamma"].map(k => [k, +state.cell[k]])),
     supercell: state.supercell.map(Number), molecules, orientations,
+    // custom coherent neutron scattering lengths (fm) by DISCUS atom name (upper case)
+    scattering: Object.fromEntries(Object.entries(state.scattering || {})
+      .filter(([, v]) => v && v.b !== "" && v.b != null && isFinite(+v.b)).map(([k, v]) => [k.toUpperCase(), +v.b])),
     sites: state.sites.map(s => ({
       label: s.label, frac: s.frac.map(Number), b_iso: +s.b_iso || 1, draw: s.draw, ...(s.sym ? { sym: s.sym } : {}),
       occupants: s.occupants.map(o => o.type === "atom" ? { type: "atom", species: o.species, p: +o.p, b: num(o.b), sigma: num(o.sigma) }
@@ -2077,7 +2239,7 @@ function generateScript(state, template) {
   return template.replace('CONFIG_JSON = r"""__CONFIG__"""', () => 'CONFIG_JSON = r"""\n' + json + '\n"""');
 }
 
-const api = { SYMBOLS, Z, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
+const api = { SYMBOLS, Z, DISCUS, discusInfo, isElementName, massNumber, scatteringTable, elementOf, zOf, colorOf, covOf, I3, mul, tr, mv, det, inv, add, sub, scale, norm, latticeMatrix,
   frac2cart, axisAngle, eulerMatrix, parseOp, closure, moleculeLocal, bondsOf, samePlacement, expandGroup, rng32,
   orientationTable, siteClasses, siteRotation, realize, parseAffine, freeParams, wyckoffOrbit, wyckoffOrbitOps, crystalSystem, fitCell, cellFits, planeGeometry, zonePlane, contactModel, PENALTY, VDW, diffusePlaneRows, validate, buildConfig, generateScript, isOrthogonal, WAVELENGTH_SYMBOLS, wavelengthValue };
 if (typeof module !== "undefined" && module.exports) module.exports = api; else root.DB = api;
@@ -2095,7 +2257,7 @@ function base() {
   return {
     title: "", seed: 1234, output_dir: "discus_model_out",
     cell: { a: 4, b: 4, c: 4, alpha: 90, beta: 90, gamma: 90 }, supercell: [10, 10, 10],
-    molecules: [], orientations: [], sites: [],
+    molecules: [], orientations: [], sites: [], scattering: {},
     disorder: { atomic_displacements: {}, molecule_rigid: { translation_sigma: 0, libration_sigma_deg: 0 }, clash_threshold: 0.8,
       correlations: { enabled: false, sweeps: 50, kT: 1, match: "orientation", interactions: [] },
       contacts: { enabled: false, change: "orientation", anneal: true, rules: [] } },
@@ -2475,9 +2637,9 @@ function fromPaper(x) {
     const atoms = [];
     (m.atoms || []).forEach((a, j) => {
       const el = str(a.element || a.el);
-      if (!DB.elementOf(el)) fail(`Molecule “${name}”, atom ${j + 1}: “${el}” is not an element symbol.`);
+      if (!DB.isElementName(el)) fail(`Molecule “${name}”, atom ${j + 1}: “${el}” is not an element symbol.`);
       const xyz = vector(a.xyz, `${name} atom ${j + 1} xyz`, { record: false });
-      if (xyz) atoms.push({ el: DB.elementOf(el) || el, xyz: xyz.map(q => +q.toFixed(6)) });
+      if (xyz) atoms.push({ el, xyz: xyz.map(q => +q.toFixed(6)) });
     });
     if (!atoms.length) fail(`Molecule “${name}” has no atoms.`);
     let anchor = "centroid";
@@ -2577,7 +2739,7 @@ function fromPaper(x) {
       if (p == null) return;
       if (type === "atom") {
         const el = str(o.element || o.species);
-        if (!DB.elementOf(el)) { fail(`${what}: “${el}” is not an element symbol.`); return; }
+        if (!DB.isElementName(el)) { fail(`${what}: “${el}” is not an element symbol.`); return; }
         let b = "";
         if (o.b_iso != null) b = number(o.b_iso, `${label0}: B of ${el} (Å²)`, { min: 0 });
         else if (o.u_iso != null) { const u = number(o.u_iso, `${label0}: U of ${el} (Å²)`, { min: 0 }); if (u != null) { b = +(8 * Math.PI * Math.PI * u).toFixed(4); rec(`${label0}: B of ${el} (Å²) = 8π²U`, b, "from U", "derived"); } }
@@ -2623,7 +2785,7 @@ function fromPaper(x) {
   // displacements
   const d = x.displacements || {};
   Object.entries(d.atom_sigma_A || {}).forEach(([el, v]) => {
-    if (!DB.elementOf(el)) { fail(`Displacements: “${el}” is not an element symbol.`); return; }
+    if (!DB.isElementName(el)) { fail(`Displacements: “${el}” is not an element symbol.`); return; }
     const q = number(v, `σ ${el} (Å)`, { min: 0 }); if (q != null) s.disorder.atomic_displacements[el] = q;
   });
   if (d.molecule_translation_sigma_A != null) { const q = number(d.molecule_translation_sigma_A, "Molecule translation σ (Å)", { min: 0 }); if (q != null) s.disorder.molecule_rigid.translation_sigma = q; }
@@ -2657,7 +2819,7 @@ function fromPaper(x) {
   // forbidden contacts
   (x.forbidden_contacts || []).forEach((r, k) => {
     const ea = str(r.element_a) || "any", eb = str(r.element_b) || "any";
-    if ((ea !== "any" && !DB.elementOf(ea)) || (eb !== "any" && !DB.elementOf(eb))) { fail(`Forbidden contact ${k + 1}: elements must be element symbols or "any".`); return; }
+    if ((ea !== "any" && !DB.isElementName(ea)) || (eb !== "any" && !DB.isElementName(eb))) { fail(`Forbidden contact ${k + 1}: elements must be element symbols or "any".`); return; }
     const dmin = number(r.min_distance_A, `Forbidden contact ${ea}–${eb} (Å)`, { positive: true });
     if (dmin == null) return;
     s.disorder.contacts.enabled = true;
@@ -3441,8 +3603,29 @@ RENDER.calc = () => {
       ${field("Qmax (Å⁻¹)", num("calc.pdf.qmax", 'class="w-s"'))}${field("ΔQ", num("calc.pdf.dq", 'class="w-s"'))}${field("Gaussian width (set delta)", num("calc.pdf.qsig", 'class="w-s"'))}
       ${field("λ (Å, empty = default)", txt("calc.pdf.wavelength", 'class="w-s"'))}</div>
     <div class="fields">${field("rmax (Å)", num("calc.pdf.rmax", 'class="w-s"'))}${field("Δr (Å)", num("calc.pdf.dr", 'class="w-s"'))}</div>
-    <p class="hint">Computed by DISCUS's powder Debye sum over the disordered supercell (N² pairs), so long-range peaks are damped by the finite crystal size. DISCUS 6.23.01 caps Q at ≈ 12.3/λ.</p></div>`;
+    <p class="hint">Computed by DISCUS's powder Debye sum over the disordered supercell (N² pairs), so long-range peaks are damped by the finite crystal size. DISCUS 6.23.01 caps Q at ≈ 12.3/λ.</p></div>
+  ${atomTypesBlock()}`;
 };
+
+// ---- atom types and scattering lengths (Calculations step)
+function atomTypesBlock() {
+  const t = DB.scatteringTable(S);
+  const rows = t.rows.map(r => {
+    const i = r.info, how = !i ? '<span class="sum bad">not readable</span>'
+      : i.known ? (i.name === "D" || i.name === "D1-" ? "deuterium (DISCUS table)" : i.name === i.el.toUpperCase() ? "element" : "ion / special form factor")
+      : `label, read as ${esc(title2(i.as))}`;
+    const xr = !i ? "—" : i.el === "D" ? "as H" : `as ${esc(title2(i.as))}`;
+    const iso = r.isotope ? `<span class="tag" title="mass number ${r.mass}">isotope?</span>` : "";
+    return `<tr><td class="num">${esc(r.label)}</td><td>${how} ${iso}</td><td class="num">${xr}</td><td class="num">${i ? fmt(r.b, 4) : "—"}</td>
+      <td><input type="number" step="any" class="w-po" data-scat="${esc(r.name)}" value="${r.custom == null ? "" : esc(r.custom)}" placeholder="${i ? fmt(r.b, 4) : ""}"
+        title="Coherent neutron scattering length of ${esc(r.label)} in fm. Empty: DISCUS's value for ${i ? esc(i.as) : "this name"}."></td></tr>`;
+  }).join("");
+  return `<div class="block"><h3>Atom types and isotopes</h3>
+    <p class="hint">How DISCUS reads each atom name in the model. Besides elements it knows ions (e.g. <code>Fe3+</code>, <code>O2-</code>) and deuterium <code>D</code>. Any other name is read as the element it starts with, so <code>Ni62</code> or <code>C1</code> scatter as Ni and C. For an isotope, name its atoms after the element (at most 4 characters, e.g. <code>Ni62</code>, <code>Li7</code>, <code>O18</code>) and give its neutron scattering length here; the script passes it to DISCUS with <code>scat</code>. X-rays see the element, whatever the isotope.</p>
+    ${rows ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Atom name</th><th>DISCUS reads it as</th><th>X-ray form factor</th><th>Neutron b, DISCUS (fm)</th><th>Neutron b, your value (fm)</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="hint">No atoms in the model yet.</p>'}
+    <p class="hint">Scattering lengths of isotopes: NIST table at <a href="https://www.ncnr.nist.gov/resources/n-lengths/" target="_blank" rel="noopener">ncnr.nist.gov/resources/n-lengths</a> (coherent b, real part, in fm). ${t.neutron ? "" : "Your values are used only in neutron calculations, and none is switched on."}</p></div>`;
+}
+const title2 = s => s.charAt(0) + s.slice(1).toLowerCase();
 
 // ---- 8 script
 RENDER.script = () => {
@@ -3822,6 +4005,11 @@ document.addEventListener("change", e => {
     save(); renderBenchControls(); markDiffuseStale(); return;
   }
   if (el.id === "pv-range" || el.id === "pv-n" || el.id === "pv-d") { S.calc.preview.range = +$("#pv-range").value || 4; S.calc.preview.n = +$("#pv-n").value || 8; S.calc.preview.draws = +$("#pv-d").value || 4; save(); renderBenchControls(); markDiffuseStale(); return; }
+  if (el.dataset.scat) {
+    const k = el.dataset.scat; S.scattering = S.scattering || {};
+    if (el.value === "") delete S.scattering[k]; else S.scattering[k] = { b: +el.value };
+    commit(); return;
+  }
   const path = el.dataset.b; if (!path) return;
   let v = el.value;
   const t = el.dataset.t;
