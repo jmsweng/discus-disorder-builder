@@ -581,9 +581,11 @@ RENDER.calc = () => {
 RENDER.script = () => {
   const v = validation;
   let code = "", err = "";
-  if (!v.errs.length) { try { code = DB.generateScript(withState(), TEMPLATE); } catch (e) { err = e.message; } }
+  // export even with problems: they are listed above the buttons, and the script stops with a clear message if it cannot run
+  try { code = DB.generateScript(withState(), TEMPLATE); } catch (e) { err = `The script cannot be written: ${e.message}`; }
   const lines = code ? code.split("\n").length : 0;
   return head("Python script", "One self-contained script: it rebuilds this model with numpy and discus-python, writes the DISCUS structure and runs the calculations. The model is embedded as JSON, so you can re-import the script here later.") + `
+  ${v.errs.length && code ? `<div class="msg warn">The model has ${v.errs.length} problem${v.errs.length === 1 ? "" : "s"} (listed below). You can still export the script, but it, or DISCUS, may stop or give wrong results until they are fixed.</div>` : ""}
   ${msgs(v.errs, "err")}${msgs(v.warns, "warn")}${err ? msgs([err], "err") : ""}
   <div class="block"><h3>Export <span class="grow"></span></h3>
     <div class="fields"><button type="button" class="btn primary" data-a="dl-script" ${code ? "" : "disabled"}>Download ${esc(fileBase())}.py</button>
